@@ -154,7 +154,7 @@
   /* ── 인앱 브라우저 안내 배너 ── */
   #inapp-banner {
     position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    display: none; align-items: center; gap: 10px;
+    display: none; flex-direction: column; gap: 8px;
     background: #1a2030; color: #fff;
     padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
     padding-top: calc(10px + env(safe-area-inset-top, 0px));
@@ -164,16 +164,19 @@
   #inapp-banner.open { display: flex; }
   #inapp-banner .ib-text { flex: 1; }
   #inapp-banner .ib-text b { color: #ffd87a; }
-  #inapp-banner .ib-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  #inapp-banner .ib-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   #inapp-banner .ib-go {
+    flex: 1; min-width: 92px;
     background: linear-gradient(135deg,#ffd87a,#ffb347); color:#5a3a10;
-    border: none; border-radius: 9px; padding: 9px 12px;
-    font-family:'Jua',sans-serif; font-size: 12px; font-weight: 700; cursor: pointer;
-    white-space: nowrap;
+    border: none; border-radius: 9px; padding: 10px 10px;
+    font-family:'Jua',sans-serif; font-size: 13px; font-weight: 700; cursor: pointer;
+    white-space: nowrap; text-align: center;
   }
+  #inapp-banner .ib-go.alt { background: rgba(255,255,255,0.16); color:#fff; }
   #inapp-banner .ib-x {
-    background: rgba(255,255,255,0.16); color:#fff; border:none;
-    width: 30px; height: 32px; border-radius: 8px; font-size: 14px; cursor: pointer;
+    background: rgba(255,255,255,0.12); color:#fff; border:none;
+    height: 38px; min-width: 38px; border-radius: 9px; font-size: 14px; cursor: pointer;
+    flex-shrink: 0;
   }
 
   /* ── 저장/공유 오버레이 (iOS 폴백) ── */
@@ -876,9 +879,11 @@
 <div id="device">
 
   <div id="inapp-banner">
-    <div class="ib-text">⚠ 인앱 브라우저에선 저장·일부 기능이 막혀요.<br><b>크롬</b>(또는 기본 브라우저)에서 열어주세요.</div>
+    <div class="ib-text">⚠ 인앱 브라우저에선 저장·일부 기능이 막혀요. 아래에서 열어주세요.</div>
     <div class="ib-actions">
-      <button class="ib-go" onclick="openInChrome()">크롬으로 열기</button>
+      <button class="ib-go" onclick="openInChrome()">🌐 크롬으로 열기</button>
+      <button class="ib-go alt" onclick="openInSafari()">🧭 Safari로 열기</button>
+      <button class="ib-go alt" onclick="copyCurrentLink()">🔗 링크 복사</button>
       <button class="ib-x" onclick="dismissInAppBanner()">✕</button>
     </div>
   </div>
@@ -3185,10 +3190,12 @@ function openSettings() {
     </div>
     <div class="field" style="padding-top:14px;border-top:1px dashed var(--btn-edge)">
       <label>🌐 브라우저에서 열기</label>
-      <button class="save-btn mint" onclick="openInChrome()">크롬으로 열기</button>
+      <button class="save-btn mint" onclick="openInChrome()">🌐 크롬으로 열기</button>
+      <button class="save-btn mint" onclick="openInSafari()">🧭 Safari로 열기</button>
+      <button class="ghost-btn" onclick="copyCurrentLink()">🔗 링크 복사 (Safari에 붙여넣기)</button>
       <div style="font-size:11px;color:var(--ink-dim);margin-top:6px;line-height:1.6;background:#f4efe2;border-radius:8px;padding:8px 10px">
         💡 카카오톡·인스타 등 <b>인앱 브라우저</b>에서는 사진 저장·데이터 내보내기가 막혀요.<br>
-        iPhone은 위 버튼으로 크롬을 열거나, 우측 상단 메뉴에서 <b>“Safari로 열기”</b>를 눌러주세요.
+        아이폰은 애플 정책상 Safari 자동 전환이 막힐 수 있어요. 그땐 <b>“🔗 링크 복사”</b> 후 홈에서 <b>Safari 앱</b>을 열고 주소창에 <b>붙여넣기</b> 하면 100% 됩니다.
       </div>
     </div>
     <button class="save-btn mint" onclick="exportData()">💾 데이터 내보내기</button>
@@ -4468,7 +4475,7 @@ function openInChrome() {
                            .replace(/^http:\/\//i, 'googlechrome://');
       location.href = chromeUrl;
       setTimeout(() => {
-        try { toast('크롬이 없으면 우측 상단 메뉴의 “Safari로 열기”를 눌러주세요.', 'warn', 3500); } catch(e){}
+        try { toast('크롬이 안 열리면 “🔗 링크 복사” 후 Safari 주소창에 붙여넣기 하세요.', 'warn', 4000); } catch(e){}
       }, 1600);
     } else {
       // 안드로이드: 인텐트로 크롬 지정
@@ -4486,6 +4493,64 @@ function showInAppBanner() {
 function dismissInAppBanner() {
   const b = document.getElementById('inapp-banner');
   if (b) b.classList.remove('open');
+}
+
+// Safari로 열기 (iOS는 공식 강제전환 수단이 없어 best-effort + 링크 자동복사)
+function openInSafari() {
+  let url = '';
+  try { url = String(location.href || ''); } catch(e) { url = ''; }
+  const isHttp = /^https?:\/\//i.test(url);
+  if (!isHttp) {
+    try { toast('이 미리보기 화면에선 전환이 안 돼요. 크롬/Safari로 직접 열어주세요.', 'warn', 4000); } catch(e){}
+    return;
+  }
+  if (!isIOS()) {
+    copyLinkToClipboard(url);
+    try { toast('Safari는 아이폰 전용이에요. 링크를 복사했어요 — 원하는 브라우저에 붙여넣기 하세요.', 'warn', 4000); } catch(e){}
+    return;
+  }
+  // 먼저 링크를 복사해 두고(폴백), Safari 직접 열기를 시도
+  copyLinkToClipboard(url);
+  try {
+    // 일부 iOS에서 x-safari- 접두사가 Safari로 튕겨줌 (보장되진 않음)
+    location.href = url.replace(/^https:\/\//i, 'x-safari-https://')
+                       .replace(/^http:\/\//i, 'x-safari-http://');
+  } catch(e) {}
+  setTimeout(() => {
+    try { toast('Safari가 안 열렸다면 링크를 복사해뒀어요. Safari 주소창에 붙여넣기 하세요.', 'warn', 5000); } catch(e){}
+  }, 1300);
+}
+
+// 현재 주소를 클립보드에 복사 (버튼용)
+function copyCurrentLink() {
+  let url = '';
+  try { url = String(location.href || ''); } catch(e) { url = ''; }
+  if (!/^https?:\/\//i.test(url)) {
+    try { toast('이 미리보기 화면에는 복사할 주소가 없어요.', 'warn', 3500); } catch(e){}
+    return;
+  }
+  copyLinkToClipboard(url);
+  try { toast('🔗 링크를 복사했어요! Safari 주소창에 붙여넣기 하세요.', 'good', 4000); } catch(e){}
+}
+function copyLinkToClipboard(url) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).catch(() => fallbackCopy(url));
+    } else { fallbackCopy(url); }
+  } catch(e) { fallbackCopy(url); }
+}
+function fallbackCopy(url) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.left = '0'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, ta.value.length); } catch(e){}
+    document.execCommand('copy');
+    ta.remove();
+  } catch(e) {}
 }
 
 // ════════════════════════════════════════════════
