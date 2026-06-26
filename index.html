@@ -166,9 +166,9 @@
   #inapp-banner .ib-text b { color: #ffd87a; }
   #inapp-banner .ib-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   #inapp-banner .ib-go {
-    flex: 1; min-width: 92px;
+    flex: 1; min-width: 130px;
     background: linear-gradient(135deg,#ffd87a,#ffb347); color:#5a3a10;
-    border: none; border-radius: 9px; padding: 10px 10px;
+    border: none; border-radius: 9px; padding: 11px 10px;
     font-family:'Jua',sans-serif; font-size: 13px; font-weight: 700; cursor: pointer;
     white-space: nowrap; text-align: center;
   }
@@ -883,7 +883,6 @@
     <div class="ib-actions">
       <button class="ib-go" onclick="openInChrome()">🌐 크롬으로 열기</button>
       <button class="ib-go alt" onclick="openInSafari()">🧭 Safari로 열기</button>
-      <button class="ib-go alt" onclick="copyCurrentLink()">🔗 링크 복사</button>
       <button class="ib-x" onclick="dismissInAppBanner()">✕</button>
     </div>
   </div>
@@ -3190,12 +3189,16 @@ function openSettings() {
     </div>
     <div class="field" style="padding-top:14px;border-top:1px dashed var(--btn-edge)">
       <label>🌐 브라우저에서 열기</label>
-      <button class="save-btn mint" onclick="openInChrome()">🌐 크롬으로 열기</button>
-      <button class="save-btn mint" onclick="openInSafari()">🧭 Safari로 열기</button>
-      <button class="ghost-btn" onclick="copyCurrentLink()">🔗 링크 복사 (Safari에 붙여넣기)</button>
-      <div style="font-size:11px;color:var(--ink-dim);margin-top:6px;line-height:1.6;background:#f4efe2;border-radius:8px;padding:8px 10px">
+      <div style="display:flex;gap:6px">
+        <button class="save-btn mint" style="flex:1" onclick="openInChrome()">🌐 크롬으로 열기</button>
+        <button class="save-btn mint" style="flex:1" onclick="openInSafari()">🧭 Safari로 열기</button>
+      </div>
+      <div style="text-align:center;margin-top:8px">
+        <button onclick="copyCurrentLink()" style="background:none;border:none;color:var(--accent2);font-size:11px;font-weight:700;text-decoration:underline;padding:4px;cursor:pointer">🔗 링크만 복사하기 (안 열릴 때)</button>
+      </div>
+      <div style="font-size:11px;color:var(--ink-dim);margin-top:4px;line-height:1.6;background:#f4efe2;border-radius:8px;padding:8px 10px">
         💡 카카오톡·인스타 등 <b>인앱 브라우저</b>에서는 사진 저장·데이터 내보내기가 막혀요.<br>
-        아이폰은 애플 정책상 Safari 자동 전환이 막힐 수 있어요. 그땐 <b>“🔗 링크 복사”</b> 후 홈에서 <b>Safari 앱</b>을 열고 주소창에 <b>붙여넣기</b> 하면 100% 됩니다.
+        아이폰은 애플 정책상 Safari 자동 전환이 막힐 수 있어요. 그땐 위 <b>“🔗 링크만 복사하기”</b> 후 홈에서 <b>Safari 앱</b>을 열고 주소창에 <b>붙여넣기</b> 하면 100% 됩니다.
       </div>
     </div>
     <button class="save-btn mint" onclick="exportData()">💾 데이터 내보내기</button>
