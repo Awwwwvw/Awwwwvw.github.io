@@ -1051,6 +1051,19 @@ const OBJECTS_META = [
   {e:'🪅',n:'피냐타',k:'fun',tier:'gacha',rarity:'일반'},
   {e:'🛸',n:'UFO',k:'fun',tier:'gacha',rarity:'전설'},
   {e:'🗿',n:'모아이',k:'deco',tier:'gacha',rarity:'희귀'},
+  // ── 전용 행동 오브젝트 (성격 특성 발현용) ──
+  {e:'🏋️',n:'덤벨',k:'active',tier:'free'},
+  {e:'🧘',n:'요가매트',k:'active',tier:'free'},
+  {e:'🧹',n:'빗자루',k:'clean',tier:'free'},
+  {e:'📦',n:'종이상자',k:'hide',tier:'free'},
+  {e:'🏃',n:'러닝머신',k:'active',tier:'shop',price:220},
+  {e:'🧺',n:'빨래바구니',k:'clean',tier:'shop',price:90},
+  {e:'🖼️',n:'진열장',k:'collect',tier:'shop',price:200},
+  {e:'⛺',n:'텐트',k:'hide',tier:'shop',price:180},
+  {e:'🪩',n:'디스코볼',k:'party',tier:'shop',price:260},
+  {e:'🎤',n:'마이크',k:'party',tier:'shop',price:150},
+  {e:'🏺',n:'골동품',k:'collect',tier:'gacha',rarity:'희귀'},
+  {e:'🎆',n:'불꽃놀이',k:'party',tier:'gacha',rarity:'희귀'},
 ];
 const GACHA_COST = 100; // 1회 뽑기 비용
 const DEV_CODE = '호구키즈파이팅';
@@ -1106,7 +1119,7 @@ const DEFAULT_STATE = () => ({
     devMode: false,
     lastCheckIn: null,
   },
-  settings: { apiMode: 'mixed', lang: 'ko', apiKey: '' },
+  settings: { apiMode: 'sonnet', lang: 'ko', apiKey: '' },
 });
 
 let state = DEFAULT_STATE();
@@ -1159,7 +1172,9 @@ function _saveWithRetry(data) {
 function normalizeChar(c) {
   return {
     ...c,
-    stats: { mood:70, energy:80, hunger:65, userAffinity:50, ...(c.stats||{}) },
+    stats: { mood:70, energy:80, hunger:65, userAffinity:50, fun:60, social:60, ...(c.stats||{}) },
+    selectedTraits: Array.isArray(c.selectedTraits) ? c.selectedTraits.slice(0,3) : [],
+    emotion: c.emotion || null,
     monologues: Array.isArray(c.monologues) ? c.monologues : [],
     userChat: Array.isArray(c.userChat) ? c.userChat : [],
     relations: c.relations || {},
@@ -1329,11 +1344,7 @@ window.onload = () => {
     if (e.target.id === 'stack-back') closeStackPopup();
   });
 
-  // 게임 시작 시 예비 대화 + 반응 대사 백그라운드 생성
-  if (state.settings.apiKey) {
-    if (state.characters.length >= 2) setTimeout(fillDialogueCache, 2500);
-    setTimeout(ensureActionLines, 3500);
-  }
+  // (비용 절감) 시작 시 미리 다 만들지 않음 — 대화/대사는 실제로 쓸 때 생성됨
 };
 
 // ════════════════════════════════════════════════
@@ -1546,8 +1557,7 @@ function addObject(e, n, k, px, py) {
   save(); renderObjects();
   if (px == null) closePanel();  // 단일 배치만 패널 닫음
   pushFeed(`${n}을(를) 놓았어요.`);
-  // 이 사물 대사가 없는 캐릭터들에게 자동 생성
-  if (state.settings.apiKey) autoGenObjLineForNew(n);
+  // (비용 절감) 배치 즉시 생성하지 않음 — 캐릭터가 이 사물과 처음 상호작용할 때 생성됨
 }
 
 // ── 다중 선택 연속 배치 (PART 8) ──
@@ -1683,43 +1693,24 @@ async function autoGenObjLineForNew(objName) {
   pushFeed(`🪑 ${targets.map(c=>c.name).join(', ')}이(가) ${objName}에 익숙해졌어요.`);
 }
 
-// 행동 대사(밥주기/기운/잠/밤/낮 혼잣말/아침) 일괄 생성 → c.actionLines 캐시
-async function generateActionLines(c, silent) {
+// 행동 대사(밥주기/기운/잠/밤/낮 혼잣말/아침/들림) 순차 생성 → c.actionLines 캐시
+// 한 섹션(상황)씩 차례로 생성하고, 끝날 때마다 onProgress(done,total,meta) 호출
+async function generateActionLines(c, silent, onProgress) {
   if (!state.settings.apiKey) return false;
-  const langName = state.settings.lang==='ja'?'일본어':state.settings.lang==='en'?'영어':'한국어';
-  const prompt = `너는 "${c.name}"이라는 캐릭터다.
-성격: ${c.personality||'평범함'}${c.traits?` / 특징: ${c.traits}`:''}${c.worldview?` / 배경: ${c.worldview}`:''}
-
-이 캐릭터가 다음 7가지 상황에서 할 법한 짧은 혼잣말 대사를 각각 5개씩 만들어줘.
-- feed: 유저가 밥/간식을 줬을 때 (고마움, 맛 표현 등)
-- cheer: 유저가 응원/기운을 북돋았을 때 (신남, 힘남 등)
-- sleep: 졸리거나 잠자리에 들 때
-- night: 밤에 혼자 있을 때 (감성적이어도 좋음)
-- idle: 낮에 심심하거나 한가할 때
-- morning: 아침에 일어났을 때
-- lift: 관찰자(유저)가 자신을 손가락으로 집어 들어 공중에 띄웠을 때의 즉각 반응 (놀람/간지러움/장난/투정 등, 성격대로)
-
-조건: 성격을 일관되게, 진짜 그 사람처럼 자연스러운 ${langName} 구어체. 각 18자 이내. 번역투·어색한 조사 금지.
-반드시 아래 JSON으로만 출력(설명/코드블록 없이):
-{"feed":["..","..","..","..",".."],"cheer":[...],"sleep":[...],"night":[...],"idle":[...],"morning":[...],"lift":[...]}`;
-  try {
-    let text = await callAPI(MODELS.haiku, 1100, prompt);
-    text = text.replace(/```json|```/g,'').trim();
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) throw new Error('형식 오류');
-    const obj = JSON.parse(m[0]);
-    const types = ['feed','cheer','sleep','night','idle','morning','lift'];
-    if (!c.actionLines) c.actionLines = {};
-    types.forEach(t => {
-      if (Array.isArray(obj[t])) c.actionLines[t] = obj[t].filter(s=>typeof s==='string'&&s.trim()).slice(0,6);
-    });
-    save();
-    if (!silent) pushFeed(`💬 ${c.name}의 반응 대사를 만들었어요.`);
-    return true;
-  } catch(e) {
-    if (!silent) pushFeed(`⚠ ${c.name} 반응 대사 생성 실패`);
-    return false;
+  if (!c.actionLines) c.actionLines = {};
+  let okCount = 0;
+  for (let i = 0; i < ACTION_TYPES.length; i++) {
+    const meta = ACTION_TYPES[i];
+    try {
+      const list = await genActionTypeLines(c, meta);   // Sonnet, 한 섹션
+      c.actionLines[meta.key] = list;
+      okCount++;
+      save();
+    } catch(e) { /* 이 섹션만 건너뛰고 다음 섹션 계속 */ }
+    if (typeof onProgress === 'function') onProgress(i + 1, ACTION_TYPES.length, meta);
   }
+  if (!silent) pushFeed(`💬 ${c.name}의 반응 대사를 만들었어요. (${okCount}/${ACTION_TYPES.length})`);
+  return okCount > 0;
 }
 // 여러 캐릭터에 대해 행동 대사가 없으면 백그라운드로 생성
 async function ensureActionLines() {
@@ -1779,7 +1770,9 @@ function addCharacter(data) {
     emoji: EMOJI_POOL[i % EMOJI_POOL.length],
     image: data.image || null,
     color: ['#ff8c6b','#6bb3a0','#f0b75e','#9d8cff','#e88aa0','#5fb0d8'][i % 6],
-    stats: { mood:70, energy:80, hunger:65, userAffinity:50 },
+    stats: { mood:70, energy:80, hunger:65, userAffinity:50, fun:60, social:60 },
+    selectedTraits: Array.isArray(data.selectedTraits) ? data.selectedTraits.slice(0,3) : [],
+    emotion: null,
     innerThought: '',
     monologues: [],
     userChat: [],
@@ -1790,11 +1783,7 @@ function addCharacter(data) {
   state.characters.push(c);
   save(); spawnChar(c); renderCharsListIfOpen();
   pushFeed(`${c.name}이(가) 우리 집에 왔어요!`);
-  // 새 캐릭터 → 반응 대사 + 예비 대화 백그라운드 생성
-  if (state.settings.apiKey) {
-    setTimeout(() => generateActionLines(c, true), 600);
-    if (state.characters.length >= 2) setTimeout(fillDialogueCache, 1500);
-  }
+  // (비용 절감) 미리 생성하지 않음 — 이 캐릭터가 실제로 말하거나 대화할 때 생성됨
 }
 function removeChar(id) {
   doRemoveChar(id);
@@ -2025,14 +2014,17 @@ function toggleDelete() {
 // ════════════════════════════════════════════════
 const STAT_META = {
   mood:{label:'기분',ic:'😊'}, energy:{label:'기운',ic:'⚡'},
-  hunger:{label:'배부름',ic:'🍙'}, userAffinity:{label:'호감도',ic:'💗'}
+  hunger:{label:'배부름',ic:'🍙'}, fun:{label:'재미',ic:'🎮'},
+  social:{label:'사교',ic:'💬'}, userAffinity:{label:'호감도',ic:'💗'}
 };
 function statColor(v){ return v>=60?'var(--good)':v>=30?'var(--warn)':'var(--bad)'; }
 function showStatus(id) {
   const c = state.characters.find(z => z.id === id); if (!c) return;
+  ensureNeeds(c);
   document.getElementById('topstatus-empty').style.display = 'none';
   const who = document.getElementById('topstatus-who');
-  who.style.display = ''; who.textContent = c.name; who.style.color = c.color;
+  const ce = curEmotion(c);
+  who.style.display = ''; who.textContent = c.name + (ce ? ` ${EMOTION_FACE[ce]}` : ''); who.style.color = c.color;
   const box = document.getElementById('topstatus-stats');
   box.style.display = '';
   box.innerHTML = Object.keys(STAT_META).map(k => {
@@ -2053,6 +2045,379 @@ function refreshStatusIfSelected() {
 }
 
 // ════════════════════════════════════════════════
+//  스마트 오브젝트 · 효용(Utility) AI · 성격 특성  (PART 1~2)
+// ════════════════════════════════════════════════
+// 14종 성격 특성 프리셋 — 카테고리별 점수 배수(mult) + 특수효과
+const TRAITS = [
+  { id:'LETHARGIC',     label:'나른함',     emoji:'😴', mult:{rest:2.5, active:0.5, sport:0.5} },
+  { id:'ACTIVE',        label:'활발함',     emoji:'⚡', mult:{active:2.0, sport:2.2, rest:0.6} },
+  { id:'DEPENDENT',     label:'의존적',     emoji:'🥺', mult:{social:3.0} },
+  { id:'LONER',         label:'개인주의',   emoji:'🚶', mult:{solo:2.0, social:0.4, party:0.3} },
+  { id:'DISCIPLINED',   label:'규범적',     emoji:'🧹', mult:{clean:2.5} },
+  { id:'CURIOUS',       label:'호기심',     emoji:'🔍', mult:{}, restless:2.5 },
+  { id:'MALICIOUS',     label:'심술궂음',   emoji:'😈', mult:{hostile:3.0, social:1.2} },
+  { id:'ALTRUISTIC',    label:'이타적',     emoji:'😇', mult:{social:2.0, hostile:0.0} },
+  { id:'HOSTILE',       label:'적대적',     emoji:'😠', mult:{hostile:3.0, social:0.5, party:0.4} },
+  { id:'OUTGOING',      label:'사교적',     emoji:'🥳', mult:{social:2.5, party:2.5}, socialDecay:1.5 },
+  { id:'OPPORTUNISTIC', label:'기회주의',   emoji:'🤑', mult:{luxury:3.0} },
+  { id:'NEUROTIC',      label:'예민함',     emoji:'😰', mult:{hide:2.0, rest:1.3, social:0.6, party:0.4} },
+  { id:'GLUTTONOUS',    label:'식탐',       emoji:'🍖', mult:{food:3.0}, hungerDecay:1.3 },
+  { id:'COLLECTOR',     label:'수집가',     emoji:'🗃️', mult:{collect:2.8, luxury:1.5} },
+  { id:'UNHINGED',      label:'미친(광기)', emoji:'🤪', mult:{hostile:2.5}, restless:3.0, chaos:true },
+  { id:'PARANOID',      label:'의심많은',   emoji:'🕵️', mult:{hide:2.5, rest:1.4, social:0.3} },
+  { id:'NARCISSIST',    label:'관종',       emoji:'🤳', mult:{luxury:2.5, social:2.0, party:1.8} },
+  { id:'TIMID',         label:'소심/겁쟁이', emoji:'😶', mult:{hide:2.0, rest:1.5, social:0.4, hostile:0.2} },
+  { id:'KIND',          label:'상냥/다정',  emoji:'🤗', mult:{social:2.0, hostile:0.2} },
+  { id:'GLOOMY',        label:'우울/염세',  emoji:'🌧️', mult:{solo:2.0, social:0.5, fun:0.6, party:0.2} },
+  { id:'CHEERFUL',      label:'낙천/명랑',  emoji:'😁', mult:{fun:2.0, social:1.6, party:2.0} },
+  { id:'OTAKU',         label:'덕후',       emoji:'🕹️', mult:{fun:2.8, social:0.5} },
+  { id:'ROMANTIC',      label:'낭만적',     emoji:'🌹', mult:{social:2.0, deco:2.0, party:1.5}, romantic:true },
+  { id:'GREEDY',        label:'탐욕',       emoji:'💰', mult:{luxury:2.5, food:1.8, collect:1.5} },
+  { id:'BRAVE',         label:'용감',       emoji:'🦁', mult:{hostile:1.5, active:1.5, sport:1.6} },
+];
+function traitById(id){ return TRAITS.find(t => t.id === id); }
+function charTraits(c){ return (c.selectedTraits || []).map(traitById).filter(Boolean); }
+
+// 오브젝트 종류 → 채우는 욕구(stat) + 양(amt)
+function objNeedFill(o) {
+  switch(o.k){
+    case 'sleep':   return { stat:'energy', amt:30 };
+    case 'rest':    return { stat:'energy', amt:12 };
+    case 'food':    return { stat:'hunger', amt:22 };
+    case 'fun':     return { stat:'fun',    amt:20 };
+    case 'active':  return { stat:'fun',    amt:18 };  // 운동 → 만족(재미)
+    case 'clean':   return { stat:'fun',    amt:9  };  // 정돈 → 소소한 만족
+    case 'collect': return { stat:'fun',    amt:11 };  // 수집/관찰
+    case 'hide':    return { stat:'energy', amt:10 };  // 숨어서 안정
+    case 'party':   return { stat:'social', amt:15 };  // 파티 → 사교 충족
+    case 'deco':    return { stat:'fun',    amt:6  };
+    default:        return { stat:'fun',    amt:5  };
+  }
+}
+// 오브젝트 → 특성 매칭용 카테고리 목록
+function objCats(o){
+  const cats = [];
+  switch(o.k){
+    case 'sleep': case 'rest': cats.push('rest','solo'); break;
+    case 'food':    cats.push('food','solo'); break;
+    case 'fun':     cats.push('fun','active','solo'); break;
+    case 'active':  cats.push('active','sport','solo'); break;
+    case 'clean':   cats.push('clean','solo'); break;
+    case 'collect': cats.push('collect','deco','solo'); break;
+    case 'hide':    cats.push('hide','rest','solo'); break;
+    case 'party':   cats.push('party','fun','social'); break;  // 파티는 단독 아님
+    case 'deco':    cats.push('deco','collect','solo'); break;
+    default:        cats.push('deco','solo');
+  }
+  const meta = OBJECTS_META.find(m => m.n === o.n);
+  if (meta && (meta.rarity==='희귀'||meta.rarity==='전설'||(meta.price||0) >= 200)) cats.push('luxury');
+  return cats;
+}
+// 특성 배수: 후보 카테고리들에 대한 곱
+function traitMult(c, cats){
+  let m = 1;
+  charTraits(c).forEach(t => {
+    if (!t.mult) return;
+    cats.forEach(cat => { if (t.mult[cat] != null) m *= t.mult[cat]; });
+  });
+  return m;
+}
+// ── 감정(Emotion) 레이어: 상호작용 직후 일시적 코드 → 카테고리 배수 ──
+function setEmotion(c, code, minutes){ c.emotion = { code, until: Date.now() + minutes*60000 }; }
+function curEmotion(c){ return (c.emotion && c.emotion.until > Date.now()) ? c.emotion.code : null; }
+const EMOTION_MULT = {
+  excited: { active:1.8, sport:1.6, rest:0.5 },
+  content: { rest:1.5, food:0.5 },
+  lonely:  { social:2.0, party:1.5 },
+  angry:   { hostile:2.0, social:0.4 },
+  happy:   { social:1.4, active:1.2 },
+  sad:     { solo:1.6, rest:1.4, social:0.6, active:0.5, fun:0.6 },
+  bored:   { fun:2.0, active:1.7, party:1.4 },
+  tired:   { rest:2.2, active:0.4, sport:0.3 },
+  scared:  { hide:2.5, rest:1.4, social:0.4 },
+  love:    { social:1.8, party:1.3, deco:1.3 },
+  proud:   { social:1.4, luxury:1.4 },
+  jealous: { hostile:1.8, social:1.2 },
+  playful: { active:1.5, fun:1.5, social:1.3 },
+};
+const EMOTION_FACE = {
+  excited:'🤩', content:'😌', lonely:'🥺', angry:'😠', happy:'😄',
+  sad:'😢', bored:'😑', tired:'😪', scared:'😨', love:'😍',
+  proud:'😎', jealous:'😤', playful:'😜',
+};
+const EMOTION_KO = {
+  excited:'신남', content:'만족', lonely:'외로움', angry:'분노', happy:'행복',
+  sad:'우울', bored:'지루함', tired:'지침', scared:'겁먹음', love:'설렘',
+  proud:'뿌듯', jealous:'질투', playful:'장난기',
+};
+function emotionMult(c, cats){
+  const e = curEmotion(c); if (!e) return 1;
+  const map = EMOTION_MULT[e]; if (!map) return 1;
+  let m = 1; cats.forEach(cat => { if (map[cat] != null) m *= map[cat]; });
+  return m;
+}
+// 상호작용 감정이 없을 때만 설정(상호작용 감정 우선 유지)
+function setEmotionIfFree(c, code, minutes){ if (!curEmotion(c)) setEmotion(c, code, minutes); }
+function ensureNeeds(c){
+  if (!c.stats) c.stats = {};
+  if (c.stats.fun == null) c.stats.fun = 60;
+  if (c.stats.social == null) c.stats.social = 60;
+}
+
+// ── 낭만적 특성: 다른 캐릭터에게 낭만 주제로 자주 말 검 (Sonnet, 쿨다운 보호) ──
+let _lastAutoTalk = 0;
+async function autoRomanceTalk(a, b) {
+  if (chatBusy || userChatBusy) return false;
+  if (!state.settings.apiKey) return false;
+  _lastAutoTalk = Date.now();
+  chatBusy = true;
+  try {
+    pushFeed(`${a.name}이(가) ${b.name}에게 다정하게 말을 걸어요... 🌹`);
+    moveTwoClose(a, b);
+    await sleep(500);
+    const script = await generateDialogueScript(a, b, '설렘과 낭만(서로의 마음·분위기)', false);
+    await playScript(script, a, b);
+    ensureNeeds(a); ensureNeeds(b);
+    a.stats.social = clamp((a.stats.social||60) + 18);
+    b.stats.social = clamp((b.stats.social||60) + 14);
+    setEmotion(a, 'happy', 4);
+    save();
+  } catch(e) {
+    pushFeed('⚠ 대화 생성 실패');
+  } finally {
+    chatBusy = false;
+  }
+  return true;
+}
+// 낭만적 캐릭터의 환경 기반 혼잣말 (캐시, API 미사용)
+const ROMANTIC_LINES = [
+  '이런 분위기, 누군가와 나누고 싶다.',
+  '달빛이 좋네... 옆에 누가 있다면.',
+  '오늘따라 마음이 말랑말랑해.',
+  '누군가에게 꽃 한 송이 건네고 싶은 밤이야.',
+  '설레는 기분, 오랜만이야.',
+  '괜히 가슴이 두근거리는 하루네.',
+];
+// 드물게 '화면 밖의 나(관찰자)'에 대해 언급하는 대사 (캐시, API 미사용)
+const OBSERVER_LINES = [
+  '...저 너머에서 누가 날 보고 있는 것 같아.',
+  '가끔 시선이 느껴져. 화면 밖에서?',
+  '당신, 지금 거기 있죠?',
+  '이 세계 밖에... 누군가 있는 걸까?',
+  '날 지켜보는 그 사람, 오늘도 왔네.',
+  '유리벽 너머의 당신, 안녕.',
+  '왠지 혼자가 아닌 느낌이야.',
+];
+
+// ── 관계 라벨 → 카테고리 (자유 입력도 키워드로 해석) ──
+function relCategory(label){
+  if (!label) return 'none';
+  const s = String(label);
+  if (/연인|애인|사랑|짝사랑|첫사랑|썸|크러시/.test(s)) return 'lover';
+  if (/앙숙|원수|적|증오|싫어|미움/.test(s))            return 'enemy';
+  if (/라이벌|경쟁/.test(s))                            return 'rival';
+  if (/가족|형제|자매|남매|부모|엄마|아빠|남편|아내|쌍둥이/.test(s)) return 'family';
+  if (/친구|절친|베프|소꿉|동료|룸메|선후배|사제|스승|제자|동기/.test(s)) return 'friend';
+  return 'acquaint';
+}
+// ── 캐릭터의 사교 성향(특성 기반) ──
+function dispositionOf(c){
+  const ids = c.selectedTraits || [];
+  return {
+    malicious: ids.includes('MALICIOUS'),
+    hostile:   ids.includes('HOSTILE') || ids.includes('UNHINGED'),
+    kind:      ids.includes('KIND') || ids.includes('ALTRUISTIC'),
+    dependent: ids.includes('DEPENDENT'),
+    narc:      ids.includes('NARCISSIST'),
+    romantic:  ids.includes('ROMANTIC'),
+    timid:     ids.includes('TIMID') || ids.includes('PARANOID'),
+    outgoing:  ids.includes('OUTGOING') || ids.includes('CHEERFUL'),
+  };
+}
+
+// ════════════════════════════════════════════════
+//  속마음 · 관계 변동 엔진 (관계 시스템)
+// ════════════════════════════════════════════════
+// 각 캐릭터가 다른 캐릭터에 대해 내부적으로 갖는 수치(0~100)
+function blankBond(){
+  return { affinity:35, trust:30, intimacy:25, wariness:20, rivalry:15,
+           jealousy:0, respect:30, dependence:10, guilt:0,
+           target:null, progress:0, log:[], think:'', thinkAt:0 };
+}
+function getBond(c, otherId){
+  if (!c.bonds) c.bonds = {};
+  if (!c.bonds[otherId]) c.bonds[otherId] = blankBond();
+  return c.bonds[otherId];
+}
+function nudge(b, key, delta){ b[key] = clamp((b[key]||0) + delta); }
+function bondLog(c, otherId, text){
+  const b = getBond(c, otherId);
+  b.log.unshift({ t: Date.now(), text });
+  if (b.log.length > 14) b.log.length = 14;
+}
+// 관계 라벨 → 시작 수치 시드 (사용자가 관계를 정하면 그에 맞게 내부수치 보정)
+function seedBondFromLabel(bd, label){
+  const rc = relCategory(label);
+  const up = (k,v)=>{ bd[k]=Math.max(bd[k]||0, v); };
+  const dn = (k,v)=>{ bd[k]=Math.min(bd[k]!=null?bd[k]:100, v); };
+  if      (rc==='lover')  { up('affinity',75); up('intimacy',75); up('trust',65); }
+  else if (rc==='friend') { up('affinity',60); up('trust',55); up('intimacy',50); }
+  else if (rc==='family') { up('affinity',60); up('trust',60); up('intimacy',55); }
+  else if (rc==='rival')  { up('rivalry',65); dn('affinity',42); }
+  else if (rc==='enemy')  { up('wariness',72); dn('affinity',18); up('rivalry',40); }
+}
+
+// 상호작용(socialBeat) 결과를 내부수치에 반영
+function applyBondFromBeat(c, other, kind){
+  const ab = getBond(c, other.id), ba = getBond(other, c.id);
+  switch(kind){
+    case 'affection': nudge(ab,'affinity',4); nudge(ab,'intimacy',5); nudge(ab,'trust',2);
+                      nudge(ba,'affinity',3); nudge(ba,'intimacy',3); break;
+    case 'comfort':   nudge(ab,'affinity',2); nudge(ab,'trust',2);
+                      nudge(ba,'trust',5);  nudge(ba,'affinity',4); break;
+    case 'friendly':  nudge(ab,'affinity',3); nudge(ab,'trust',1);
+                      nudge(ba,'affinity',2); break;
+    case 'cling':     nudge(ab,'dependence',5); nudge(ab,'intimacy',2);
+                      nudge(ba,'wariness',1); break;
+    case 'brag':      nudge(ba,'wariness',1); nudge(ba,'respect',1); break;
+    case 'argue':     nudge(ab,'rivalry',4); nudge(ab,'wariness',2); nudge(ab,'affinity',-1);
+                      nudge(ba,'rivalry',3); nudge(ba,'wariness',2); nudge(ba,'affinity',-2); break;
+    case 'bully':     nudge(ab,'guilt',2); nudge(ab,'affinity',-1);
+                      nudge(ba,'wariness',6); nudge(ba,'affinity',-4); nudge(ba,'trust',-3); break;
+  }
+  const FE = { affection:'다정하게 대함 💕', comfort:'위로해줌 🤗', friendly:'어울림 💬',
+               cling:'졸졸 따라다님 🐤', brag:'자랑함 🤳', argue:'다툼 ⚡', bully:'괴롭힘 😈' };
+  bondLog(c, other.id, FE[kind] || '상호작용');
+}
+// 대화(자동/수동) 후 친밀감 상승
+function bondAfterDialogue(a, b, romantic){
+  const ab = getBond(a,b.id), ba = getBond(b,a.id);
+  const amt = romantic ? 5 : 3;
+  nudge(ab,'intimacy',amt); nudge(ab,'affinity',amt-1);
+  nudge(ba,'intimacy',amt); nudge(ba,'affinity',amt-1);
+  const t = romantic ? '설레는 대화 🌹' : '대화를 나눔 💬';
+  bondLog(a,b.id,t); bondLog(b,a.id,t);
+}
+
+// 내부수치 → 추천 관계 라벨
+function suggestLabel(a, b, bd){
+  const mutual = getBond(b, a.id);
+  if (bd.wariness > 65 && bd.affinity < 22) return '앙숙';
+  if (bd.rivalry  > 55 && bd.affinity < 45) return '라이벌';
+  if (bd.affinity > 60 && bd.intimacy > 62 && bd.trust > 52) {
+    if (mutual.affinity > 50 && mutual.intimacy > 50) return '연인';
+    return '썸';
+  }
+  if (bd.affinity > 50 && bd.trust > 45) return '친구';
+  if (bd.affinity > 44 && bd.intimacy > 46) return '썸';
+  return '지인';
+}
+function isExtremeChange(bd){
+  return bd.affinity > 72 || bd.wariness > 75 || bd.rivalry > 72 || bd.affinity < 14;
+}
+function setRelationLabel(a, b, label, doLog){
+  if (!a.relations) a.relations = {};
+  const prev = a.relations[b.id] || '없음';
+  a.relations[b.id] = label;
+  if (doLog && prev !== label) {
+    bondLog(a, b.id, `관계 변화: ${prev} → ${label}`);
+    pushFeed(`💞 ${a.name}의 마음 속 ${b.name}과(와)의 관계가 '${label}'(으)로 바뀌었어요.`);
+  }
+}
+// 목표 관계 경로 (단계적 발전)
+const TARGET_PATH = {
+  '연인':['지인','친구','썸','연인'], '친구':['지인','친구'],
+  '라이벌':['지인','라이벌'], '동료':['지인','동료'], '앙숙':['지인','앙숙'],
+};
+function progressTowardTarget(a, b, bd){
+  if (['연인','친구','동료'].includes(bd.target)) {
+    nudge(bd,'affinity',1.2); nudge(bd,'trust',0.8);
+    if (bd.target==='연인') nudge(bd,'intimacy',1.2);
+  } else {
+    nudge(bd,'rivalry',1.0); nudge(bd,'wariness',0.8); nudge(bd,'affinity',-0.4);
+  }
+  bd.progress = clamp((bd.progress||0) + 5);
+  const path = TARGET_PATH[bd.target] || ['지인', bd.target];
+  const cur = (a.relations||{})[b.id] || '지인';
+  const idx = Math.max(0, path.indexOf(cur));
+  const step = 100 / (path.length - 1);
+  const wantIdx = Math.min(path.length - 1, Math.floor(bd.progress / step));
+  if (wantIdx > idx) setRelationLabel(a, b, path[wantIdx], true);
+  if (bd.progress >= 100 && (a.relations||{})[b.id] === bd.target) {
+    bondLog(a, b.id, `🎯 목표 관계 '${bd.target}' 달성!`);
+    pushFeed(`🎯 ${a.name} → ${b.name}: 목표 관계 '${bd.target}' 달성!`);
+    bd.target = null;
+  }
+}
+// 주기적 재평가 — NPC끼리도 누적 수치로 관계가 자연스럽게 형성·발전·악화
+function evaluateRelationships(){
+  const cs = state.characters;
+  if (cs.length < 2) return;
+  const drama = !!(state.settings && state.settings.dramaMode);
+  let changed = false;
+  cs.forEach(a => cs.forEach(b => {
+    if (a.id === b.id) return;
+    const bd = getBond(a, b.id);
+    if (bd.target) { progressTowardTarget(a, b, bd); changed = true; return; }
+    const cur = (a.relations||{})[b.id] || '';
+    const sug = suggestLabel(a, b, bd);
+    if (sug && sug !== cur && sug !== '지인') {
+      const allow = drama ? true : (!cur || isExtremeChange(bd));
+      if (allow) { setRelationLabel(a, b, sug, true); changed = true; }
+    }
+  }));
+  if (changed) { save(); renderCharsListIfOpen(); refreshStatusIfSelected(); }
+}
+
+// ── 효용 점수 연산: 주변 오브젝트 + 타 캐릭터 후보 점수화 ──
+function scoreCandidates(c, night){
+  ensureNeeds(c);
+  const out = [];
+  const dist = (ax,ay,bx,by) => Math.hypot(ax-bx, ay-by);
+  // (1) 오브젝트
+  state.objects.forEach(o => {
+    const nf = objNeedFill(o);
+    const cur = c.stats[nf.stat] != null ? c.stats[nf.stat] : 100;
+    const deficit = Math.max(0, 100 - cur);
+    if (deficit <= 0 && nf.stat !== 'fun') return;        // 가득찬 욕구는 스킵(재미는 항상 약간 매력)
+    const cats = objCats(o);
+    let score = (deficit + (nf.stat==='fun' ? 15 : 0)) * 0.1;  // 기본 효용 = 결핍도
+    score *= traitMult(c, cats);                              // 성격 배수
+    score *= emotionMult(c, cats);                            // 감정 배수
+    const d = dist(c.x||50, c.y||50, o.x, o.y);
+    score *= (1 + Math.max(0, 60 - d) / 120);                // 거리(가까울수록 ↑)
+    if (night && nf.stat !== 'energy') score *= 0.5;         // 밤엔 활동 욕구 ↓
+    out.push({ type:'object', obj:o, fill:nf, score });
+  });
+  // (2) 타 캐릭터 (관계·성향 기반 사교/적대 — 친구↔라이벌↔연인 추적/회피)
+  const disp = dispositionOf(c);
+  state.characters.filter(o => o.id !== c.id && !isLocked(o.id)).forEach(o => {
+    const cur = c.stats.social != null ? c.stats.social : 100;
+    const deficit = Math.max(0, 100 - cur);
+    const rc = relCategory(c.relations && c.relations[o.id]);
+    let relMult = 1, relHostile = false;
+    if      (rc === 'lover')  relMult = 2.2;
+    else if (rc === 'friend' || rc === 'family') relMult = 1.6;
+    else if (rc === 'rival')  { relMult = 1.6; relHostile = true; }
+    else if (rc === 'enemy')  { relMult = 1.8; relHostile = true; }
+    // 성향에 따른 적대 여부 결정
+    let hostile = relHostile || disp.malicious || disp.hostile;
+    if (disp.kind) hostile = false;                 // 상냥/이타는 공격 안 함
+    if (disp.dependent && (rc === 'lover' || rc === 'friend' || rc === 'family')) relMult *= 1.5; // 의존 → 가까운 사람 졸졸
+    if (disp.timid && (rc === 'enemy' || hostile)) relMult *= 0.3; // 겁많으면 적/공격 회피
+    const cats = hostile ? ['hostile','social'] : ['social'];
+    let score = (deficit + 12) * 0.09 * relMult;
+    score *= traitMult(c, cats);
+    score *= emotionMult(c, cats);
+    const d = dist(c.x||50, c.y||50, o.x||50, o.y||50);
+    score *= (1 + Math.max(0, 60 - d) / 120);
+    if (night) score *= 0.6;
+    out.push({ type:'char', other:o, hostile, rc, score });
+  });
+  return out;
+}
+
+// ════════════════════════════════════════════════
 //  게임 루프
 // ════════════════════════════════════════════════
 function startGameLoop() {
@@ -2064,12 +2429,31 @@ function gameTick() {
   const phase = currentPhase();
   const night = phase === 'night';
   state.characters.forEach(c => {
+    ensureNeeds(c);
+    // 특성별 감소 속도 배수 (식탐→배고픔 빨리, 사교적→사교 빨리)
+    let hungerRate = 1.3, socialRate = 0.7;
+    charTraits(c).forEach(t => {
+      if (t.hungerDecay) hungerRate *= t.hungerDecay;
+      if (t.socialDecay) socialRate *= t.socialDecay;
+    });
     c.stats.energy = clamp(c.stats.energy - (night ? 0.4 : 1.1));
-    c.stats.hunger = clamp(c.stats.hunger - 1.3);
+    c.stats.hunger = clamp(c.stats.hunger - hungerRate);
+    c.stats.fun    = clamp((c.stats.fun != null ? c.stats.fun : 60) - (night ? 0.4 : 0.8));
+    c.stats.social = clamp((c.stats.social != null ? c.stats.social : 60) - socialRate);
     let moodDrift = 0.4;
     if (c.stats.hunger < 30) moodDrift -= 1.2;
     if (c.stats.energy < 25) moodDrift -= 1.0;
+    if (c.stats.fun < 25)    moodDrift -= 0.6;
+    if (c.stats.social < 20) moodDrift -= 0.6;
     c.stats.mood = clamp(c.stats.mood + moodDrift);
+    // 상태 기반 감정 (상호작용 감정이 없을 때만)
+    if (!curEmotion(c)) {
+      if      (c.stats.mood < 25)   setEmotion(c, 'sad', 3);
+      else if (c.stats.energy < 20) setEmotion(c, 'tired', 3);
+      else if (c.stats.social < 18) setEmotion(c, 'lonely', 3);
+      else if (c.stats.fun < 20)    setEmotion(c, 'bored', 3);
+      else if (c.stats.mood > 85 && c.stats.fun > 70 && Math.random() < 0.25) setEmotion(c, 'playful', 2);
+    }
     refreshSleepy(c);
   });
   save();
@@ -2086,44 +2470,141 @@ function gameTick() {
   }
 }
 
+const IDLE_THRESHOLD = 1.0;   // 이보다 매력적인 후보가 없으면 그냥 배회
 function doBehavior(c, night) {
-  if (c.stats.hunger < 35 && findObj('food')) {
-    const o = findObj('food');
-    moveCharToObj(c, o);
-    c.stats.hunger = clamp(c.stats.hunger + 22);
-    c.stats.mood   = clamp(c.stats.mood + 5);
-    say(c, objLine(c, o.n, o.k));
-    pushFeed(`${c.name}이(가) ${o.n}을(를) 먹었어요. 🍴`);
-  } else if (c.stats.energy < 28 && findObj('sleep')) {
-    const o = findObj('sleep');
-    moveCharToObj(c, o);
-    c.stats.energy = clamp(c.stats.energy + 30);
-    say(c, actionLine(c, 'sleep'));
-    pushFeed(`${c.name}이(가) ${o.n}에서 쉬고 있어요. 💤`);
-  } else if (night) {
-    moveCharRandom(c, true);
-    if (Math.random() < 0.5) { say(c, actionLine(c, 'night')); pushFeed(`${c.name}이(가) 밤하늘을 보고 있어요. 🌙`); }
-  } else {
-    const usedMono = Math.random() < 0.55 && speakMonologue(c);
-    if (!usedMono) {
-      if (state.objects.length && Math.random() < 0.45) {
-        const o = state.objects[Math.floor(Math.random() * state.objects.length)];
-        moveCharToObj(c, o);
-        say(c, objLine(c, o.n, o.k));
-        pushFeed(`${c.name}이(가) ${o.n} 근처에 있어요.`);
-      } else {
-        moveCharRandom(c, false);
-        if (Math.random() < 0.4) {
-          const phase = currentPhase();
-          const t = phase==='morning' ? 'morning' : 'idle';
-          say(c, actionLine(c, t)); pushFeed(`${c.name}이(가) ${pick(FEED_IDLE)}`);
-        }
-      }
+  ensureNeeds(c);
+  // 광기(chaos) 특성: 가끔 무작위 감정 폭발 → 돌발 행동 유도
+  if (charTraits(c).some(t => t.chaos) && Math.random() < 0.25) {
+    setEmotion(c, pick(['excited', 'angry', 'happy', 'sad', 'playful', 'jealous', 'bored', 'scared']), 2);
+  }
+  // 낭만적 특성: 가끔 다른 캐릭터에게 낭만 주제로 말 검 (Sonnet, 3분 쿨다운 — 드물게)
+  if (charTraits(c).some(t => t.romantic) && state.settings.apiKey && !chatBusy && !userChatBusy) {
+    const mates = state.characters.filter(o => o.id !== c.id && !isLocked(o.id));
+    if (mates.length && (Date.now() - _lastAutoTalk > 180000) && Math.random() < 0.25) {
+      const lover = mates.find(o => relCategory(c.relations && c.relations[o.id]) === 'lover');
+      autoRomanceTalk(c, lover || pick(mates));
+      return;
     }
+  }
+  // 호기심(restless): 가끔 점수 무시하고 자리를 옮김 (한 자리에 오래 X)
+  const restless = Math.max(1, ...charTraits(c).map(t => t.restless || 1));
+  if (restless > 1 && Math.random() < 0.12 * restless) { wanderIdle(c, night); return; }
+
+  const cands = scoreCandidates(c, night);
+  cands.sort((a, b) => b.score - a.score);
+  const best = cands[0];
+
+  // 욕구가 다 차 있고 매력적 타겟도 없으면 → 혼잣말/배회 (API 없이)
+  if (!best || best.score < IDLE_THRESHOLD) {
+    if (!night && Math.random() < 0.55 && speakMonologue(c)) { /* 혼잣말로 마무리 */ }
+    else wanderIdle(c, night);
+    return;
+  }
+
+  if (best.type === 'object') {
+    const o = best.obj, nf = best.fill;
+    moveCharToObj(c, o);
+    c.stats[nf.stat] = clamp((c.stats[nf.stat] != null ? c.stats[nf.stat] : 60) + nf.amt);
+    c.stats.mood = clamp(c.stats.mood + 4);
+    say(c, objLine(c, o.n, o.k));
+    if (nf.stat === 'hunger')      { setEmotion(c, 'content', 3); pushFeed(`${c.name}이(가) ${o.n}을(를) 먹었어요. 🍴`); }
+    else if (nf.stat === 'energy') { pushFeed(`${c.name}이(가) ${o.n}에서 쉬어요. 💤`); }
+    else if (nf.stat === 'fun')    { setEmotion(c, 'excited', 3); pushFeed(`${c.name}이(가) ${o.n}을(를) 즐겨요. 🎮`); }
+    else                           { pushFeed(`${c.name}이(가) ${o.n} 근처에 있어요.`); }
+  } else {
+    socialBeat(c, best.other, best.hostile);
   }
   save();
   refreshStatusIfSelected();
 }
+
+// 배회(욕구 타겟이 없을 때) — API 미사용
+function wanderIdle(c, night) {
+  moveCharRandom(c, night);
+  c.stats.fun = clamp((c.stats.fun != null ? c.stats.fun : 60) - 0.5);
+  // 드물게: '화면 밖의 나(관찰자)'에 대해 언급
+  if (Math.random() < 0.05) {
+    say(c, pick(OBSERVER_LINES));
+    pushFeed(`${c.name}이(가) 화면 밖을 가만히 바라봐요... 👀`);
+    save(); return;
+  }
+  // 낭만적: 환경 기반 낭만 혼잣말 자주
+  if (charTraits(c).some(t => t.romantic) && Math.random() < 0.5) {
+    say(c, pick(ROMANTIC_LINES));
+    save(); return;
+  }
+  if (Math.random() < 0.4) {
+    const phase = currentPhase();
+    const t = night ? 'night' : (phase === 'morning' ? 'morning' : 'idle');
+    say(c, actionLine(c, t));
+    pushFeed(night ? `${c.name}이(가) 밤하늘을 보고 있어요. 🌙` : `${c.name}이(가) ${pick(FEED_IDLE)}`);
+  }
+  save();
+}
+
+// 관계×성향별 상호작용 정의 (캐시 대사, API 미사용)
+const SOCIAL_BEATS = {
+  affection: { cSoc:16, oSoc:12, cMood:6, oMood:6, emo:'happy', emoMin:4,
+    lines:['오늘 더 예뻐 보여.','네 옆이 제일 편해.','같이 있어줘서 고마워.','보고 싶었어.','손 잡아도 돼?'],
+    feed:o=>`이(가) ${o.name}에게 다정하게 굴어요. 💕` },
+  bully:   { cSoc:8, oSoc:0, cMood:2, oMood:-10, emo:'happy', emoMin:2,
+    lines:['풉, 그게 뭐야~','너 진짜 못났다.','비켜, 거슬려.','한심하긴.','꼴 보기 싫어.'],
+    feed:o=>`이(가) ${o.name}을(를) 괴롭혀요. 😈` },
+  argue:   { cSoc:8, oSoc:4, cMood:-2, oMood:-4, emo:'angry', emoMin:2,
+    lines:['그 정도로 날 이기겠다고?','흥, 두고 보자.','내가 더 잘하거든?','시비냐?','질 생각 없어.'],
+    feed:o=>`이(가) ${o.name}와(과) 티격태격해요. ⚡` },
+  comfort: { cSoc:12, oSoc:14, cMood:4, oMood:12, emo:'happy', emoMin:3,
+    lines:['괜찮아? 내가 있잖아.','힘내, 다 잘될 거야.','무슨 일 있으면 말해.','곁에 있어줄게.','울지 마, 응?'],
+    feed:o=>`이(가) ${o.name}을(를) 다독여요. 🤗` },
+  cling:   { cSoc:18, oSoc:6, cMood:5, oMood:2, emo:'happy', emoMin:3,
+    lines:['같이 가도 돼?','나 두고 가지 마~','너만 따라다닐래.','심심해, 놀아줘.','옆에 있을래.'],
+    feed:o=>`이(가) ${o.name}을(를) 졸졸 따라다녀요. 🐤` },
+  brag:    { cSoc:12, oSoc:2, cMood:6, oMood:-2, emo:'happy', emoMin:3,
+    lines:['내가 좀 멋지지?','이거 봐, 나 잘하지?','다들 날 좋아한다니까.','오늘도 완벽해~','부럽지?'],
+    feed:o=>`이(가) ${o.name}에게 자랑을 늘어놔요. 🤳` },
+  friendly:{ cSoc:14, oSoc:10, cMood:5, oMood:4, emo:'happy', emoMin:3,
+    lines:['요즘 어때?','그거 봤어?','같이 놀자!','오랜만이야~','밥은 먹었어?'],
+    feed:o=>`이(가) ${o.name}와(과) 어울려요. 💬` },
+};
+// 타 캐릭터 상호작용 — 관계 + 성향으로 종류 결정 (API 미사용)
+function socialBeat(c, other, hostileHint) {
+  ensureNeeds(c); ensureNeeds(other);
+  moveCharToObj(c, { x:(other.x!=null?other.x:50), y:(other.y!=null?other.y:50) });
+  const rc = relCategory(c.relations && c.relations[other.id]);
+  const d  = dispositionOf(c);
+  const emo = curEmotion(c);
+  const targetSad = other.stats && other.stats.mood < 35;
+
+  let kind;
+  if (rc === 'lover' || (d.romantic && (rc==='friend' || rc==='family')))            kind = 'affection';
+  else if ((d.malicious || rc==='enemy') && !d.kind)                                 kind = 'bully';
+  else if ((d.hostile || rc==='rival' || emo==='jealous' || emo==='angry') && !d.kind) kind = 'argue';
+  else if (d.kind && targetSad)                                                      kind = 'comfort';
+  else if (d.dependent)                                                              kind = 'cling';
+  else if (d.narc || emo==='proud')                                                  kind = 'brag';
+  else                                                                               kind = 'friendly';
+
+  const B = SOCIAL_BEATS[kind];
+  c.stats.social     = clamp((c.stats.social||60) + B.cSoc);
+  other.stats.social = clamp((other.stats.social||60) + B.oSoc);
+  c.stats.mood       = clamp(c.stats.mood + B.cMood);
+  other.stats.mood   = clamp(other.stats.mood + B.oMood);
+  if (B.emo) setEmotion(c, B.emo, B.emoMin || 3);
+  // 연인 삼각관계: 애정 표현을 목격한 '제3의 연인'은 질투
+  if (kind === 'affection') {
+    state.characters.forEach(z => {
+      if (z.id !== c.id && z.id !== other.id &&
+          relCategory(z.relations && z.relations[other.id]) === 'lover') {
+        setEmotion(z, 'jealous', 4);
+      }
+    });
+  }
+  say(c, pick(B.lines));
+  pushFeed(`${c.name}${B.feed(other)}`);
+  save();
+  refreshStatusIfSelected();
+}
+
 
 const LINES = {
   feed:   () => ['고마워!','잘 먹을게~','맛있다!','배고팠는데!','이거 좋아해'],
@@ -2143,18 +2624,39 @@ const LINES = {
 };
 const FEED_IDLE = ['창가에서 생각에 잠겨 있어요.','콧노래를 부르고 있어요.','방을 천천히 둘러봐요.','기지개를 켜요.','두리번거려요.'];
 
-// 오브젝트 대사: 캐시(c.objLines) 우선, 없으면 기본 LINES.object
+// ── 지연 생성: 미리 다 만들지 않고, 실제로 처음 쓰일 때 1회만 생성 (비용 절감) ──
+const _actGenStarted = new Set();   // 반응대사: 캐릭터별 1회
+const _objGenStarted = new Set();   // 사물대사: 캐릭터+사물별 1회
+function lazyGenActionLines(c) {
+  if (!state.settings.apiKey) return;
+  if (_actGenStarted.has(c.id)) return;
+  if (c.actionLines && Array.isArray(c.actionLines.idle) && c.actionLines.idle.length) return; // 이미 있음
+  _actGenStarted.add(c.id);
+  generateActionLines(c, true); // 백그라운드(조용히), 끝나면 다음부터 개성 대사 사용
+}
+function lazyGenObjLine(c, objName) {
+  if (!state.settings.apiKey) return;
+  const key = c.id + '|' + objName;
+  if (_objGenStarted.has(key)) return;
+  if (c.objLines && c.objLines[objName] && c.objLines[objName].length) return; // 이미 있음
+  _objGenStarted.add(key);
+  regenObjLinesSequential(c.id, [objName]); // 이 사물 대사만 1회 생성(Sonnet)
+}
+
+// 오브젝트 대사: 캐시(c.objLines) 우선, 없으면 처음 쓸 때 생성 예약 + 기본 LINES.object
 function objLine(c, objName, objKind) {
   if (c.objLines && c.objLines[objName] && c.objLines[objName].length) {
     return pick(c.objLines[objName]);
   }
+  lazyGenObjLine(c, objName);
   return pick(LINES.object(objName, objKind));
 }
-// 행동 대사(밥주기/기운/잠/밤/낮/혼잣말): 캐시(c.actionLines) 우선, 없으면 기본 LINES
+// 행동 대사: 캐시(c.actionLines) 우선, 없으면 처음 쓸 때 생성 예약 + 기본 LINES
 function actionLine(c, type) {
   if (c.actionLines && Array.isArray(c.actionLines[type]) && c.actionLines[type].length) {
     return pick(c.actionLines[type]);
   }
+  lazyGenActionLines(c);
   const fn = LINES[type];
   return fn ? pick(fn()) : '...';
 }
@@ -2249,13 +2751,8 @@ function refreshActLineRows(id, type) {
   box.innerHTML = lines.length ? lines.map((tx,i)=>actLineRow(id,type,i,tx)).join('')
     : '<div style="color:var(--ink-dim);font-size:11px;padding:4px 2px">대사가 없어요.</div>';
 }
-// 특정 상황 대사만 재생성
-async function regenActionLine(id, type) {
-  const c = state.characters.find(z => z.id === id); if (!c) return;
-  if (!state.settings.apiKey) { toast('⚙️ 설정에서 API 키를 먼저 입력해주세요.', 'warn'); return; }
-  const meta = ACTION_TYPES.find(t => t.key === type); if (!meta) return;
-  const btn = document.getElementById(`actregen-${id}-${type}`);
-  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+// 반응 대사 '한 섹션'만 생성해서 배열로 반환 (Sonnet)
+async function genActionTypeLines(c, meta) {
   const langName = state.settings.lang==='ja'?'일본어':state.settings.lang==='en'?'영어':'한국어';
   let relText = '';
   if (c.relations && Object.keys(c.relations).length) {
@@ -2274,15 +2771,25 @@ async function regenActionLine(id, type) {
 
 조건: 성격·말투가 진하게 묻어나게, 진짜 그 사람처럼 자연스러운 ${langName} 구어체. 각 18자 이내. 번역투 금지. 서로 다른 톤.
 JSON 배열로만 출력(설명/코드블록 없이): ["대사1","대사2","대사3","대사4","대사5"]`;
+  let text = await callAPI(MODELS.sonnet, 500, prompt);
+  text = text.replace(/```json|```/g,'').trim();
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) throw new Error('형식 오류');
+  const list = JSON.parse(m[0]);
+  if (!Array.isArray(list) || !list.length) throw new Error('빈 결과');
+  return list.filter(s=>typeof s==='string').slice(0,6);
+}
+// 특정 상황 대사만 재생성
+async function regenActionLine(id, type) {
+  const c = state.characters.find(z => z.id === id); if (!c) return;
+  if (!state.settings.apiKey) { toast('⚙️ 설정에서 API 키를 먼저 입력해주세요.', 'warn'); return; }
+  const meta = ACTION_TYPES.find(t => t.key === type); if (!meta) return;
+  const btn = document.getElementById(`actregen-${id}-${type}`);
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
   try {
-    let text = await callAPI(MODELS.sonnet, 500, prompt);
-    text = text.replace(/```json|```/g,'').trim();
-    const m = text.match(/\[[\s\S]*\]/);
-    if (!m) throw new Error('형식 오류');
-    const list = JSON.parse(m[0]);
-    if (!Array.isArray(list) || !list.length) throw new Error('빈 결과');
+    const list = await genActionTypeLines(c, meta);
     if (!c.actionLines) c.actionLines = {};
-    c.actionLines[type] = list.filter(s=>typeof s==='string').slice(0,6);
+    c.actionLines[type] = list;
     save();
     refreshActLineRows(id, type);
     toast(`🔄 '${meta.label}' 대사를 새로 만들었어요.`, 'ok');
@@ -2291,13 +2798,16 @@ JSON 배열로만 출력(설명/코드블록 없이): ["대사1","대사2","대�
   }
   if (btn) { btn.disabled = false; btn.textContent = '🔄 재생성'; }
 }
-// 전체 반응 대사 재생성 (기존 generateActionLines 재사용)
+// 전체 반응 대사 재생성 — 한 섹션 끝나면 바로 다음 섹션 (순차 자동 연속)
 async function regenAllActionLines(id) {
   const c = state.characters.find(z => z.id === id); if (!c) return;
   if (!state.settings.apiKey) { toast('⚙️ 설정에서 API 키를 먼저 입력해주세요.', 'warn'); return; }
   const btn = document.getElementById('actregen-all-' + id);
-  if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; btn.textContent = '🔄 전체 생성 중...'; }
-  const ok = await generateActionLines(c, true);
+  if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; }
+  const ok = await generateActionLines(c, true, (done, total, meta) => {
+    if (btn) btn.textContent = `🔄 (${done}/${total}) ${meta.label}...`;
+    if (document.getElementById('actdash-' + id)) renderActDash(id); // 섹션마다 채워지는 게 보이게
+  });
   if (document.getElementById('actdash-' + id)) renderActDash(id);
   toast(ok ? '🔄 반응 대사를 전부 새로 만들었어요.' : '생성에 실패했어요.', ok ? 'ok' : 'warn');
   if (btn) { btn.disabled = false; btn.textContent = btn.dataset.o || '🔄 전체 재생성'; }
@@ -2464,16 +2974,43 @@ function openCharPanel(editId) {
     </div>
     <div class="field"><label>성격</label><textarea id="f-personality" rows="2" placeholder="차분하고 사려깊음">${v('personality')}</textarea></div>
     <div class="field"><label>특징 (외모·버릇)</label><textarea id="f-traits" rows="2" placeholder="긴 흑발, 책을 자주 든다">${v('traits')}</textarea></div>
+    <div class="field"><label>🧠 성격 특성 (자율행동 AI · 최대 3개)</label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <select id="f-trait0" onchange="enforceUniqueTraits()">${traitOptions((c&&c.selectedTraits)?c.selectedTraits[0]:'')}</select>
+        <select id="f-trait1" onchange="enforceUniqueTraits()">${traitOptions((c&&c.selectedTraits)?c.selectedTraits[1]:'')}</select>
+        <select id="f-trait2" onchange="enforceUniqueTraits()">${traitOptions((c&&c.selectedTraits)?c.selectedTraits[2]:'')}</select>
+      </div>
+      <div style="font-size:10px;color:var(--ink-dim);margin-top:4px">고른 특성이 "어디로 갈지·뭘 할지"에 점수 배수로 작용해요. (예: 식탐→음식, 나른함→휴식)</div>
+    </div>
     <div class="field"><label>세계관 / 스토리</label><textarea id="f-worldview" rows="2" placeholder="마법학교 3학년...">${v('worldview')}</textarea></div>
     <button class="save-btn" onclick="submitChar('${editId || ''}')">${c ? '수정 완료' : '추가하기'}</button>
     ${c ? `<button class="ghost-btn" onclick="openCharList()">← 목록으로</button>` : ''}
   `);
+  setTimeout(enforceUniqueTraits, 0); // 초기 중복 옵션 비활성화
+}
+// 특성 드롭다운 옵션 + 중복 방지
+function traitOptions(selectedId){
+  return `<option value="">— 없음 —</option>` +
+    TRAITS.map(t => `<option value="${t.id}" ${selectedId===t.id?'selected':''}>${t.emoji} ${t.label}</option>`).join('');
+}
+function enforceUniqueTraits(){
+  const sels = ['f-trait0','f-trait1','f-trait2'].map(i => document.getElementById(i)).filter(Boolean);
+  const chosen = sels.map(s => s.value);
+  sels.forEach((sel, idx) => {
+    Array.from(sel.options).forEach(op => {
+      op.disabled = op.value !== '' && chosen.some((v, j) => j !== idx && v === op.value);
+    });
+  });
 }
 function submitChar(editId) {
   const g = id => document.getElementById(id).value.trim();
   const name = g('f-name');
   if (!name) { toast('이름을 입력해주세요.', 'warn'); return; }
   const data = { name, age:g('f-age'), gender:g('f-gender'), personality:g('f-personality'), traits:g('f-traits'), worldview:g('f-worldview') };
+  const traitVals = ['f-trait0','f-trait1','f-trait2']
+    .map(i => { const e = document.getElementById(i); return e ? e.value : ''; })
+    .filter(Boolean);
+  data.selectedTraits = [...new Set(traitVals)].slice(0, 3);
   if (editId) {
     const c = state.characters.find(z => z.id === editId);
     if (c) {
@@ -2553,6 +3090,7 @@ function renderCharsList() {
         <div style="flex:1;min-width:0">
           <div class="nm" style="color:${c.color}">${escapeHtml(c.name)}</div>
           <div class="sub">${[c.age && c.age+'세', c.gender, c.personality].filter(Boolean).join(' · ') || '설정 없음'}</div>
+          ${(c.selectedTraits&&c.selectedTraits.length)||curEmotion(c) ? `<div style="font-size:10px;margin-top:2px">${charTraits(c).map(t=>`<span style="background:#f0ead9;border-radius:8px;padding:1px 6px;margin-right:3px">${t.emoji} ${t.label}</span>`).join('')}${curEmotion(c)?`<span style="margin-left:2px;background:#f3e3e3;border-radius:8px;padding:1px 6px">${EMOTION_FACE[curEmotion(c)]||''} ${EMOTION_KO[curEmotion(c)]||''}</span>`:''}</div>` : ''}
         </div>
         <button class="del" onclick="requestRemoveChar('${c.id}')">✕</button>
       </div>
@@ -3051,10 +3589,9 @@ function switchWorld(idx) {
   renderChars();
   renderWorldTabs();
   save();
-  // 월드가 바뀌면 대화 캐시·로테이션 초기화 후 새 월드용 채우기
+  // 월드가 바뀌면 대화 캐시·로테이션 초기화 (새 월드 캐시는 대화를 처음 쓸 때 채워짐)
   dialogueCache = {};
   _usedPairs = []; _lastPair = null;
-  if (state.characters.length >= 2 && state.settings.apiKey) setTimeout(fillDialogueCache, 1500);
   pushFeed(`🌍 '${w.name}' 월드로 이동했어요.`);
 }
 function addWorld() {
@@ -3174,10 +3711,10 @@ function openSettings() {
     <div class="field">
       <label>대화 품질 모드</label>
       <select id="set-mode" onchange="setMode(this.value)">
-        <option value="mixed"  ${state.settings.apiMode==='mixed' ?'selected':''}>혼합 (추천 ⭐)</option>
-        <option value="haiku"  ${state.settings.apiMode==='haiku' ?'selected':''}>절약 (빠름·저렴)</option>
-        <option value="sonnet" ${state.settings.apiMode==='sonnet'?'selected':''}>고품질 (느림·비쌈)</option>
+        <option value="sonnet" ${state.settings.apiMode!=='haiku'?'selected':''}>고품질 (Sonnet · 추천 ⭐)</option>
+        <option value="haiku"  ${state.settings.apiMode==='haiku'?'selected':''}>절약 (Haiku · 빠름·저렴)</option>
       </select>
+      <div style="font-size:10px;color:var(--ink-dim);margin-top:5px;line-height:1.5">모든 대사 생성·대화가 기본 <b>Sonnet</b>으로 만들어져요. (비용을 줄이려면 '절약'으로)</div>
     </div>
     <div class="field">
       <label>언어</label>
@@ -3515,99 +4052,59 @@ async function regenObjLines(id, objName) {
   if (btn) { btn.disabled = false; btn.textContent = '🔄 재생성'; }
 }
 
-// 배치된 모든 사물 대사를 한 번에 전부 새로 생성 (기존 것도 교체)
+// 배치된 모든 사물 대사를 새로 생성 — 처음부터 사물 하나씩 순차 (한 방에 X)
 async function regenAllObjLines(id) {
   const c = state.characters.find(z => z.id === id); if (!c) return;
   if (!state.settings.apiKey) { toast('⚙️ 설정에서 API 키를 먼저 입력해주세요.', 'warn'); return; }
   if (!c.objLines) c.objLines = {};
-  // 배치된 사물 + 이미 대사가 있는 사물 모두 대상
   const placed = state.objects.map(o => o.n);
   const haveLines = Object.keys(c.objLines).filter(k => c.objLines[k] && c.objLines[k].length);
   const names = [...new Set([...placed, ...haveLines])];
   if (!names.length) { toast('먼저 사물을 배치해주세요.', 'warn'); return; }
   const btn = document.getElementById('objregen-all-' + id);
-  if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; btn.textContent = '🔄 전체 생성 중...'; }
-  const langName = state.settings.lang==='ja'?'일본어':state.settings.lang==='en'?'영어':'한국어';
-  let relText = '';
-  if (c.relations && Object.keys(c.relations).length) {
-    const lines = [];
-    Object.keys(c.relations).forEach(oid=>{
-      const other = state.characters.find(z=>z.id===oid);
-      if (other && c.relations[oid]) lines.push(`${other.name}(${c.relations[oid]})`);
-    });
-    if (lines.length) relText = `\n관계: ${lines.join(', ')}`;
-  }
-  const prompt = `너는 "${c.name}"이라는 살아있는 캐릭터다.
-성격: ${c.personality||'평범함'}${c.traits?` / 특징: ${c.traits}`:''}${c.worldview?` / 배경: ${c.worldview}`:''}${relText}
-
-아래 사물들 각각을 마주하거나 사용할 때 흘리는 혼잣말을 새로 만들어줘.
-사물: ${names.join(', ')}
-
-[중요 규칙]
-- "X에 앉았다", "X 좋다" 같은 단순 행동묘사·평면적 대사 절대 금지.
-- 캐릭터의 성격·말투·가치관·관계가 진하게 묻어나게. 사물을 매개로 내면이나 관계가 드러나도록.
-- 각 사물마다 4~5개씩, 서로 다른 톤. 각 25자 내외, 자연스러운 ${langName} 구어체, 번역투 금지.
-- JSON으로만 출력(설명/코드블록 없이): {"사물이름":["대사1","대사2","대사3","대사4"], ...}`;
-  try {
-    // 사물 수에 맞춰 넉넉히 (사물당 ~340토큰, 최대 8000)
-    const objMaxTok = Math.min(8000, 1000 + names.length * 340);
-    let text = await callAPI(MODELS.sonnet, objMaxTok, prompt);
-    let obj;
-    try {
-      obj = safeParseObj(text);
-    } catch(parseErr) {
-      // 한 번에 파싱 실패 → 사물별로 쪼개서 개별 생성 (절대 안 잘림)
-      toast('한 번에 받기엔 양이 많아 하나씩 만드는 중...', 'warn');
-      await regenObjLinesSequential(id, names);
-      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.o || '🔄 전체 재생성'; }
-      return;
-    }
-    if (!c.objLines) c.objLines = {};
-    let cnt = 0;
-    Object.keys(obj).forEach(k => {
-      if (Array.isArray(obj[k]) && obj[k].length) { c.objLines[k] = obj[k].filter(s=>typeof s==='string').slice(0,6); cnt++; }
-    });
-    // 빠진 사물이 있으면 그것만 개별 보충
-    const missing = names.filter(n => !c.objLines[n] || !c.objLines[n].length);
-    if (missing.length) await regenObjLinesSequential(id, missing);
-    save();
-    if (document.getElementById('objdash-' + id)) renderObjDash(id);
-    toast(`🔄 사물 ${Math.max(cnt, names.length-missing.length)}종의 대사를 새로 만들었어요.`, 'ok');
-  } catch(e) {
-    toast(`전체 재생성 실패: ${e.message}`, 'warn');
-  }
+  if (btn) { btn.disabled = true; btn.dataset.o = btn.textContent; }
+  const ok = await regenObjLinesSequential(id, names, (done, total, n) => {
+    if (btn) btn.textContent = `🔄 (${done}/${total}) ${n}...`;
+  });
+  if (document.getElementById('objdash-' + id)) renderObjDash(id);
+  toast(`🔄 사물 ${ok}종의 대사를 새로 만들었어요.`, ok ? 'ok' : 'warn');
   if (btn) { btn.disabled = false; btn.textContent = btn.dataset.o || '🔄 전체 재생성'; }
 }
 
-// 사물들을 하나씩 순차 재생성 (양 많을 때 폴백 — 잘림 방지)
-async function regenObjLinesSequential(id, names) {
-  const c = state.characters.find(z => z.id === id); if (!c) return;
+// 사물들을 하나씩 순차 생성 (한 사물 끝나면 바로 다음 — 잘림 없음, Sonnet)
+async function regenObjLinesSequential(id, names, onProgress) {
+  const c = state.characters.find(z => z.id === id); if (!c) return 0;
   if (!c.objLines) c.objLines = {};
-  for (const n of names) {
+  let ok = 0;
+  for (let i = 0; i < names.length; i++) {
+    const n = names[i];
     try {
       const prompt = buildObjLinePrompt(c, n, 5);
       let text = await callAPI(MODELS.sonnet, 600, prompt);
       text = text.replace(/```json|```/g,'').trim();
       const mm = text.match(/\[[\s\S]*\]/);
-      if (!mm) continue;
-      const list = JSON.parse(mm[0]);
-      if (Array.isArray(list) && list.length) {
-        c.objLines[n] = list.filter(s=>typeof s==='string').slice(0,6);
-        save();
-        if (document.getElementById('objdash-' + id)) renderObjDash(id);
+      if (mm) {
+        const list = JSON.parse(mm[0]);
+        if (Array.isArray(list) && list.length) {
+          c.objLines[n] = list.filter(s=>typeof s==='string').slice(0,6);
+          ok++;
+          save();
+          if (document.getElementById('objdash-' + id)) renderObjDash(id);
+        }
       }
     } catch(_) { /* 이 사물만 건너뜀 */ }
+    if (typeof onProgress === 'function') onProgress(i + 1, names.length, n);
   }
+  return ok;
 }
 
 // ════════════════════════════════════════════════
 //  API 엔진
 // ════════════════════════════════════════════════
 function pickModel(kind) {
-  const mode = state.settings.apiMode || 'mixed';
-  if (mode === 'haiku')  return MODELS.haiku;
-  if (mode === 'sonnet') return MODELS.sonnet;
-  return kind === 'casual' ? MODELS.haiku : MODELS.sonnet;
+  const mode = state.settings.apiMode || 'sonnet';
+  if (mode === 'haiku') return MODELS.haiku; // '절약' 모드만 Haiku
+  return MODELS.sonnet;                      // 기본(고품질)·혼합 → 전부 Sonnet
 }
 async function callAPI(model, max_tokens, prompt) {
   const RETRYABLE = new Set([429,500,502,503,504,529]);
@@ -3710,7 +4207,7 @@ async function generateMonologues(id, append) {
 ${langLine}`;
   try {
     const maxTok = Math.min(2000, 40 + count * 28);
-    let text = await callAPI(MODELS.haiku, maxTok, prompt);
+    let text = await callAPI(MODELS.sonnet, maxTok, prompt);
     text = text.replace(/```json|```/g,'').trim();
     const m = text.match(/\[[\s\S]*\]/);
     if (m) text = m[0];
@@ -3735,7 +4232,7 @@ ${langLine}`;
   }
 }
 
-// ── 오브젝트별 대사 생성 (오브젝트당 4~5개, 캐시 후 무료) ──
+// ── 오브젝트별 대사 생성 (없는 것만, 사물 하나씩 순차 — 한 방에 X) ──
 async function generateObjectLines(id) {
   const c = state.characters.find(z => z.id === id); if (!c) return;
   if (!state.settings.apiKey) { toast('⚙️ 설정에서 API 키를 먼저 입력해주세요.', 'warn'); return; }
@@ -3745,64 +4242,21 @@ async function generateObjectLines(id) {
   const need = names.filter(n => !c.objLines[n] || !c.objLines[n].length);
   if (!need.length) { pushFeed(`${c.name}은(는) 이미 모든 사물 대사를 갖고 있어요.`); return; }
   const btn = document.getElementById('objline-btn-' + id);
-  if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; btn.textContent = '🪑 만드는 중...'; }
-  const langName = state.settings.lang==='ja'?'일본어':state.settings.lang==='en'?'영어':'한국어';
-  // 관계 주입
-  let relText = '';
-  if (c.relations && Object.keys(c.relations).length) {
-    const lines = [];
-    Object.keys(c.relations).forEach(oid=>{
-      const other = state.characters.find(z=>z.id===oid);
-      if (other && c.relations[oid]) lines.push(`${other.name}(${c.relations[oid]})`);
-    });
-    if (lines.length) relText = `\n관계: ${lines.join(', ')}`;
-  }
-  const prompt = `너는 "${c.name}"이라는 살아있는 캐릭터다.
-성격: ${c.personality||'평범함'}${c.traits?` / 특징: ${c.traits}`:''}${c.worldview?` / 배경: ${c.worldview}`:''}${relText}
-
-아래 사물들 각각을 마주하거나 사용할 때 흘리는 혼잣말을 만들어줘.
-사물: ${need.join(', ')}
-
-[중요 규칙]
-- "X에 앉았다", "X 좋다" 같은 단순 행동묘사·평면적 대사 절대 금지.
-- 캐릭터의 성격·말투·가치관·관계가 진하게 묻어나게. 사물을 매개로 내면이나 관계가 드러나도록.
-- 각 사물마다 4~5개씩, 서로 다른 톤. 각 25자 내외, 자연스러운 ${langName} 구어체, 번역투 금지.
-- JSON으로만 출력(설명/코드블록 없이): {"사물이름":["대사1","대사2","대사3","대사4"], ...}`;
-  try {
-    const objMaxTok = Math.min(8000, 1000 + need.length * 340);
-    let text = await callAPI(MODELS.sonnet, objMaxTok, prompt);
-    let obj;
-    try {
-      obj = safeParseObj(text);
-    } catch(parseErr) {
-      await regenObjLinesSequential(id, need);
-      pushFeed(`${c.name}이(가) 사물들에 익숙해졌어요. 🪑`);
-      if (document.getElementById('clist')) renderCharsList();
-      if (document.getElementById('objdash-' + id)) renderObjDash(id);
-      if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig || '🪑 사물 대사'; }
-      return;
-    }
-    Object.keys(obj).forEach(k => {
-      if (Array.isArray(obj[k]) && obj[k].length) c.objLines[k] = obj[k].filter(s => typeof s === 'string').slice(0, 5);
-    });
-    // 빠진 사물 개별 보충
-    const stillMissing = need.filter(n => !c.objLines[n] || !c.objLines[n].length);
-    if (stillMissing.length) await regenObjLinesSequential(id, stillMissing);
-    save();
-    pushFeed(`${c.name}이(가) 사물들에 익숙해졌어요. 🪑`);
-    if (document.getElementById('clist')) renderCharsList();
-    if (document.getElementById('objdash-' + id)) renderObjDash(id);  // 대시보드 갱신
-  } catch(e) {
-    pushFeed(`⚠ 사물 대사 생성 실패: ${e.message}`);
-    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig || '🪑 사물 대사'; }
-  }
+  if (btn) { btn.disabled = true; btn.dataset.orig = btn.textContent; }
+  const ok = await regenObjLinesSequential(id, need, (done, total, n) => {
+    if (btn) btn.textContent = `🪑 (${done}/${total}) ${n}...`;
+  });
+  pushFeed(`${c.name}이(가) 사물들에 익숙해졌어요. 🪑 (${ok}/${need.length})`);
+  if (document.getElementById('clist')) renderCharsList();
+  if (document.getElementById('objdash-' + id)) renderObjDash(id);
+  if (btn) { btn.disabled = false; btn.textContent = btn.dataset.orig || '🪑 사물 대사'; }
 }
 
 // ════════════════════════════════════════════════
 //  대화 캐싱 큐 (로딩 체감 제거 — 백그라운드 예비 대화)
 // ════════════════════════════════════════════════
 const DIALOGUE_THEMES = ['일상','다과','고민 상담','추억','사소한 말다툼','계획 세우기','비밀 이야기','취미','날씨/계절','엉뚱한 상상'];
-const CACHE_PER_PAIR = 5;       // 페어당 예비 대화 개수
+const CACHE_PER_PAIR = 3;       // 페어당 예비 대화 개수 (비용 절감: 5→3)
 let dialogueCache = {};         // { "id1|id2": [ {script, theme}, ... ] }
 let _fillingCache = false;      // 백그라운드 채우기 진행 중 플래그
 
