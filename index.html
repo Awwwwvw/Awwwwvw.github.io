@@ -1119,12 +1119,25 @@ const DEFAULT_STATE = () => ({
     devMode: false,
     lastCheckIn: null,
   },
-  settings: { apiMode: 'sonnet', lang: 'ko', apiKey: '' },
+  settings: { apiMode: 'sonnet', lang: 'ko', apiKey: '', autoGen: true },
 });
 
 let state = DEFAULT_STATE();
 let chatBusy = false;
 let paused = false;
+let _apiCalls = 0;     // 이번 세션 API 호출 횟수 (비용 가늠용)
+let _apiActive = 0;    // 진행 중인 호출 수 ('AI 생성 중' 표시용)
+function updateGenIndicator() {
+  let el = document.getElementById('gen-indicator');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'gen-indicator';
+    el.textContent = '🤖 AI 생성 중…';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:80;background:rgba(26,32,48,.92);color:#fff;font-size:12px;font-weight:700;padding:7px 15px;border-radius:20px;box-shadow:0 6px 18px rgba(0,0,0,.35);display:none;pointer-events:none;letter-spacing:.3px';
+    (document.body || document.documentElement).appendChild(el);
+  }
+  el.style.display = _apiActive > 0 ? 'block' : 'none';
+}
 let selected = null;
 let deleteMode = false;
 let drag = null, dragOff={x:0,y:0}, dragMoved=false, dragStart={x:0,y:0};
@@ -1135,7 +1148,20 @@ let userChatBusy = false;
 // ════════════════════════════════════════════════
 //  STORAGE — 방어적 저장/로드
 // ════════════════════════════════════════════════
+let _saveTimer = null;
 function save() {
+  syncCurrentWorld();              // 메모리 상태는 항상 즉시 동기화
+  // 디스크 기록만 모아서: 최대 ~15초에 1번 (매 틱 이미지까지 직렬화하던 부담 제거)
+  // 앱 종료·백그라운드·뒤로가기 시엔 _saveWithRetry로 즉시 저장되므로 데이터 유실 위험은 낮음
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    _saveWithRetry(state);
+  }, 15000);
+}
+// 즉시 기록이 필요한 곳(구매·월드 변경 등)에서 사용
+function saveNow() {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
   syncCurrentWorld();
   _saveWithRetry(state);
 }
@@ -1275,8 +1301,14 @@ window.addEventListener('beforeunload', () => { _saveWithRetry(state); });
 window.addEventListener('pagehide',     () => { _saveWithRetry(state); });
 // visibilitychange는 document에서 발생하는 이벤트라 window에 걸면 일부 브라우저/상황에서
 // 안 잡힐 수 있음 → document에 등록해야 탭 전환·백그라운드 전환 시 안정적으로 저장됨
+let _bgPaused = false;
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') _saveWithRetry(state);
+  if (document.visibilityState === 'hidden') {
+    if (!paused) { paused = true; _bgPaused = true; } // 백그라운드: 자동 생성·동작 정지(불필요한 API 차단)
+    _saveWithRetry(state);
+  } else if (_bgPaused) {
+    paused = false; _bgPaused = false;                 // 복귀: 우리가 멈춘 경우에만 재개(수동 일시정지는 유지)
+  }
 });
 
 // ── 뒤로 가기 1회 방지 ──
@@ -1299,6 +1331,8 @@ function initBackGuard() {
 window.onload = () => {
   load();
   migrateLargeImages();
+  loadDialogueCache();   // 저장된 예비 대화 복원 (재실행 시 재생성 방지)
+  pruneDialogueCache();  // 현재 캐릭터에 없는 페어 정리
   // 타이틀 화면은 매번 표시 (튜토리얼만 처음 한 번)
   const ts = document.getElementById('title-screen');
   if (ts) ts.style.display = 'flex';
@@ -1326,6 +1360,11 @@ window.onload = () => {
   dailyCheckIn();
   renderWorldTabs();
   initBackGuard();
+
+  // 키가 없어도 캐릭터는 살아 움직인다는 안내 + 키 유도(맛보기)
+  if (!state.settings.apiKey) {
+    setTimeout(() => pushFeed('💡 키 없이도 캐릭터는 살아 움직여요. AI 대화를 켜려면 설정(⚙️)에서 키를 넣어주세요.'), 1500);
+  }
 
   // 인앱 브라우저(카카오톡·인스타 등)면 크롬 안내 배너 노출
   // (about:srcdoc 등 미리보기 환경에서는 오탐·전환불가라 제외)
@@ -1744,8 +1783,8 @@ function spawnChar(c) {
   el.style.top  = c.y + '%';
   el.innerHTML = `
     <div class="bubble" id="bubble-${c.id}"></div>
-    <div class="body">${c.image ? `<img src="${c.image}">` : c.emoji}</div>
-    <div class="tag" style="color:${c.color}">${escapeHtml(c.name)}</div>`;
+    <div class="body">${c.image ? `<img src="${escapeVal(c.image)}">` : escapeHtml(c.emoji)}</div>
+    <div class="tag" style="color:${escapeVal(c.color)}">${escapeHtml(c.name)}</div>`;
   el.addEventListener('pointerdown', ev => onCharDown(ev, c.id));
   world.appendChild(el);
   refreshSleepy(c);
@@ -1757,7 +1796,7 @@ function refreshSleepy(c) {
 }
 
 function addCharacter(data) {
-  if (state.characters.length >= 4) { toast('캐릭터는 최대 4명까지예요! 👥'); return; }
+  if (state.characters.length >= 6) { toast('캐릭터는 최대 6명까지예요! 👥'); return; }
   const i = state.characters.length;
   const c = {
     id: 'c' + Date.now(),
@@ -2478,7 +2517,7 @@ function doBehavior(c, night) {
     setEmotion(c, pick(['excited', 'angry', 'happy', 'sad', 'playful', 'jealous', 'bored', 'scared']), 2);
   }
   // 낭만적 특성: 가끔 다른 캐릭터에게 낭만 주제로 말 검 (Sonnet, 3분 쿨다운 — 드물게)
-  if (charTraits(c).some(t => t.romantic) && state.settings.apiKey && !chatBusy && !userChatBusy) {
+  if (charTraits(c).some(t => t.romantic) && state.settings.apiKey && state.settings.autoGen !== false && !chatBusy && !userChatBusy) {
     const mates = state.characters.filter(o => o.id !== c.id && !isLocked(o.id));
     if (mates.length && (Date.now() - _lastAutoTalk > 180000) && Math.random() < 0.25) {
       const lover = mates.find(o => relCategory(c.relations && c.relations[o.id]) === 'lover');
@@ -3398,7 +3437,7 @@ function addCash(amount, reason) {
   if (state.economy.devMode) return;
   state.economy.cash = Math.max(0, state.economy.cash + amount);
   updateCashDisplay();
-  save();
+  saveNow();
   if (reason && amount>0) pushFeed(`🪙 +${amount} (${reason})`);
 }
 function spendCash(amount) {
@@ -3406,7 +3445,7 @@ function spendCash(amount) {
   if (state.economy.cash < amount) return false;
   state.economy.cash -= amount;
   updateCashDisplay();
-  save();
+  saveNow();
   return true;
 }
 
@@ -3591,6 +3630,7 @@ function switchWorld(idx) {
   save();
   // 월드가 바뀌면 대화 캐시·로테이션 초기화 (새 월드 캐시는 대화를 처음 쓸 때 채워짐)
   dialogueCache = {};
+  saveDialogueCache();
   _usedPairs = []; _lastPair = null;
   pushFeed(`🌍 '${w.name}' 월드로 이동했어요.`);
 }
@@ -3724,6 +3764,15 @@ function openSettings() {
         <option value="en" ${state.settings.lang==='en'?'selected':''}>English</option>
       </select>
     </div>
+    <div class="field">
+      <label>자동 대화 생성</label>
+      <select id="set-autogen" onchange="setAutoGen(this.value==='on')">
+        <option value="on"  ${state.settings.autoGen!==false?'selected':''}>켜짐 (백그라운드로 미리 생성 — 매끄러움)</option>
+        <option value="off" ${state.settings.autoGen===false?'selected':''}>꺼짐 (필요할 때만 생성 — 비용 절약)</option>
+      </select>
+      <div style="font-size:10px;color:var(--ink-dim);margin-top:5px;line-height:1.5">끄면 자동 대화·예비 생성을 멈춰요. 💬·🎭·말걸기 버튼은 눌렀을 때 그대로 작동해요.</div>
+      <div style="font-size:11.5px;color:var(--accent2);font-weight:700;margin-top:9px;background:#f4efe2;border-radius:8px;padding:8px 10px">📊 이번 세션 API 호출 <span style="font-size:14px">${_apiCalls}</span>회</div>
+    </div>
     <div class="field" style="padding-top:14px;border-top:1px dashed var(--btn-edge)">
       <label>🌐 브라우저에서 열기</label>
       <div style="display:flex;gap:6px">
@@ -3787,10 +3836,14 @@ function submitDevCode() {
 function setMode(v){ state.settings.apiMode = v; save(); }
 function setApiKey(v){ state.settings.apiKey = v.trim(); save(); }
 function setLang(v){ state.settings.lang = v; save(); }
+function setAutoGen(v){ state.settings.autoGen = !!v; save(); }
 
 function exportData() {
   const BOM = '\uFEFF';
-  const blob = new Blob([BOM + JSON.stringify(state, null, 2)], { type:'application/json;charset=utf-8' });
+  // 키는 내보내지 않음(백업 파일 공유 시 유출 방지)
+  const safe = JSON.parse(JSON.stringify(state));
+  if (safe.settings) safe.settings.apiKey = '';
+  const blob = new Blob([BOM + JSON.stringify(safe, null, 2)], { type:'application/json;charset=utf-8' });
   saveFile(blob, 'hello-world-data.json', { title: 'Hello World 데이터' });
 }
 function triggerImport() {
@@ -3802,41 +3855,54 @@ function importData(e) {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = ev => {
+    let parsed;
     try {
       let raw = ev.target.result;
       if (typeof raw === 'string' && raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // BOM 제거
-      const parsed = JSON.parse(raw);
+      parsed = JSON.parse(raw);
       if (typeof parsed !== 'object' || parsed === null) throw new Error('잘못된 형식');
-      state = DEFAULT_STATE();
-      Object.assign(state, parsed);
-      if (!Array.isArray(state.characters)) state.characters = [];
-      if (!Array.isArray(state.objects))    state.objects = [];
-      if (!Array.isArray(state.feed))       state.feed = [];
-      if (!state.settings) state.settings = DEFAULT_STATE().settings;
-      if (!state.economy) state.economy = DEFAULT_STATE().economy;
-      else state.economy = { ...DEFAULT_STATE().economy, ...state.economy };
-      state.characters = state.characters.map(c => ({
-        ...c,
-        stats: { mood:70, energy:80, hunger:65, userAffinity:50, ...(c.stats||{}) },
-        monologues: Array.isArray(c.monologues) ? c.monologues : [],
-        userChat:   Array.isArray(c.userChat)   ? c.userChat   : [],
-        relations:  c.relations || {},
-      }));
-      _saveWithRetry(state);
-      // 저장된 데이터를 다시 로드해 멀티월드 구조까지 정확히 복원
-      load();
-      document.querySelectorAll('.obj').forEach(e => e.remove());
-      document.querySelectorAll('.char').forEach(e => e.remove());
-      renderObjects();
-      renderChars();
-      updatePhase();
-      updateCashDisplay();
-      renderWorldTabs();
-      closePanel();
-      pushFeed('데이터를 불러왔어요. ✨');
     } catch(err) {
       toast('파일 형식이 올바르지 않아요.', 'warn');
+      return;
     }
+    // 덮어쓰기 전 확인 (현재 캐릭터·진행 상황이 교체됨)
+    showConfirm({
+      icon: '📂',
+      msg: '현재 데이터를 덮어쓰고<br>이 파일을 불러올까요?<br><span style="font-size:12px;color:var(--ink-dim)">지금의 캐릭터·진행 상황이 교체돼요.</span>',
+      okText: '불러오기', cancelText: '취소',
+      onOk: () => {
+        // 불러오기 전 현재 내 키를 보관 (파일 안의 키는 무시 → 타인 키로 과금 방지)
+        const prevKey = (state.settings && state.settings.apiKey) || '';
+        state = DEFAULT_STATE();
+        Object.assign(state, parsed);
+        if (!Array.isArray(state.characters)) state.characters = [];
+        if (!Array.isArray(state.objects))    state.objects = [];
+        if (!Array.isArray(state.feed))       state.feed = [];
+        if (!state.settings) state.settings = DEFAULT_STATE().settings;
+        state.settings.apiKey = prevKey; // 내 키 유지
+        if (!state.economy) state.economy = DEFAULT_STATE().economy;
+        else state.economy = { ...DEFAULT_STATE().economy, ...state.economy };
+        state.characters = state.characters.map(c => ({
+          ...c,
+          stats: { mood:70, energy:80, hunger:65, userAffinity:50, ...(c.stats||{}) },
+          monologues: Array.isArray(c.monologues) ? c.monologues : [],
+          userChat:   Array.isArray(c.userChat)   ? c.userChat   : [],
+          relations:  c.relations || {},
+        }));
+        _saveWithRetry(state);
+        // 저장된 데이터를 다시 로드해 멀티월드 구조까지 정확히 복원
+        load();
+        document.querySelectorAll('.obj').forEach(e => e.remove());
+        document.querySelectorAll('.char').forEach(e => e.remove());
+        renderObjects();
+        renderChars();
+        updatePhase();
+        updateCashDisplay();
+        renderWorldTabs();
+        closePanel();
+        pushFeed('데이터를 불러왔어요. ✨');
+      }
+    });
   };
   r.readAsText(f);
 }
@@ -4107,9 +4173,13 @@ function pickModel(kind) {
   return MODELS.sonnet;                      // 기본(고품질)·혼합 → 전부 Sonnet
 }
 async function callAPI(model, max_tokens, prompt) {
+  _apiCalls++; _apiActive++; updateGenIndicator();
+  try {
   const RETRYABLE = new Set([429,500,502,503,504,529]);
   for (let attempt = 1; attempt <= 4; attempt++) {
-    let res;
+    let res, data;
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 30000); // 30초 무응답이면 중단(무한 '생성 중' 방지)
     try {
       res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -4119,18 +4189,26 @@ async function callAPI(model, max_tokens, prompt) {
           'anthropic-version': '2023-06-01',
           'anthropic-dangerous-direct-browser-access': 'true',
         },
-        body: JSON.stringify({ model, max_tokens, messages: [{role:'user',content:prompt}] })
+        body: JSON.stringify({ model, max_tokens, messages: [{role:'user',content:prompt}] }),
+        signal: ctrl.signal
       });
+      data = await res.json();
     } catch(e) {
+      clearTimeout(to);
+      if (e.name === 'AbortError') throw new Error('TIMEOUT');
       if (attempt < 4) { await sleep(attempt * 700); continue; }
-      throw new Error('네트워크 오류');
+      throw new Error(navigator.onLine === false ? 'OFFLINE' : 'CONN');
     }
-    const data = await res.json();
+    clearTimeout(to);
     if (res.ok) return (data.content?.[0]?.text || '').trim();
+    if (res.status === 401 || res.status === 403) throw new Error('AUTH');
     if (RETRYABLE.has(res.status) && attempt < 4) { await sleep(attempt * 800); continue; }
     throw new Error(data.error?.message || ('오류 ' + res.status));
   }
   throw new Error('여러 번 시도했지만 실패했어요.');
+  } finally {
+    _apiActive--; updateGenIndicator();
+  }
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -4165,24 +4243,49 @@ function safeParseObj(raw) {
   throw new Error('대사 형식을 읽지 못했어요');
 }
 
+// 셋업·연결 오류에 대한 구체적 안내 토스트 (대화/말걸기 공통)
+function showSetupHint(kind) {
+  if (kind === 'auth') {
+    toast('설정(⚙️)에서 API 키가 올바른지 확인해 주세요.', 'warn', 4500);
+  } else if (kind === 'blocked') {
+    toast(isInAppBrowser()
+      ? '인앱 브라우저에선 막혀요. 메뉴에서 Safari·Chrome으로 열어주세요.'
+      : '요청이 차단됐어요. 미리보기가 아닌 Safari·Chrome에서 파일을 열고, 광고·추적 차단을 꺼보세요.', 'warn', 5500);
+  } else if (kind === 'offline') {
+    toast('인터넷 연결을 확인해 주세요.', 'warn', 4000);
+  } else if (kind === 'timeout') {
+    toast('응답이 지연됐어요. 잠시 후 다시 시도해 주세요.', 'warn', 4000);
+  }
+}
 function sayError(c, kind) {
   const msgs = {
-    token: ['앗, 지금은 머리가 좀 복잡해요... (토큰 소진)','한도가 초과됐어요!'],
-    net:   ['방금 한 말은 못 들었어요! (네트워크 오류)','연결이 잠깐 끊겼어요'],
-    busy:  ['지금 좀 정신없어요!'],
+    token:   ['앗, 지금은 머리가 좀 복잡해요... (한도 초과)','잠시 후 다시 시도해 주세요'],
+    auth:    ['API 키를 확인해 주세요!','키가 올바르지 않은 것 같아요'],
+    blocked: ['연결이 막혀 있어요!','요청이 차단된 것 같아요'],
+    offline: ['인터넷이 끊긴 것 같아요!'],
+    timeout: ['응답이 너무 늦어요...'],
+    net:     ['방금 한 말은 못 들었어요! (네트워크 오류)','연결이 잠깐 끊겼어요'],
+    busy:    ['지금 좀 정신없어요!'],
   };
   const text = pick(msgs[kind] || msgs.net);
   const b = document.getElementById('bubble-' + c.id);
   if (b) {
     if (bubbleTimers[c.id]) clearTimeout(bubbleTimers[c.id]);
-    b.textContent = text; b.style.color = '#e86b5a'; b.classList.add('show');
+    b.textContent = text; b.style.color = 'var(--bad)'; b.classList.add('show');
     bubbleTimers[c.id] = setTimeout(() => { b.classList.remove('show'); b.style.color = ''; }, 3000);
   }
   pushFeed('⚠ ' + text);
+  showSetupHint(kind); // 셋업·연결 문제면 구체적 안내
 }
 function classifyError(msg) {
-  const m = (msg || '').toLowerCase();
-  if (m.includes('overload')||m.includes('rate')||m.includes('limit')||m.includes('exceed')||m.includes('429')) return 'token';
+  const m = (msg || '');
+  if (m === 'AUTH')    return 'auth';
+  if (m === 'CONN')    return 'blocked';
+  if (m === 'OFFLINE') return 'offline';
+  if (m === 'TIMEOUT') return 'timeout';
+  const l = m.toLowerCase();
+  if (l.includes('overload')||l.includes('rate')||l.includes('limit')||l.includes('exceed')||l.includes('429')||l.includes('529')) return 'token';
+  if (l.includes('401')||l.includes('403')||l.includes('authentication')||l.includes('api key')||l.includes('api_key')||l.includes('invalid x-api-key')) return 'auth';
   return 'net';
 }
 
@@ -4260,6 +4363,18 @@ const CACHE_PER_PAIR = 3;       // 페어당 예비 대화 개수 (비용 절감
 let dialogueCache = {};         // { "id1|id2": [ {script, theme}, ... ] }
 let _fillingCache = false;      // 백그라운드 채우기 진행 중 플래그
 
+// 대화 캐시 영속화: 재실행해도 유지 → 세션마다 재생성하던 API 비용 제거
+const DLG_CACHE_KEY = STORAGE_KEY + ':dlgcache';
+function saveDialogueCache() {
+  try { localStorage.setItem(DLG_CACHE_KEY, JSON.stringify(dialogueCache)); } catch(e) {}
+}
+function loadDialogueCache() {
+  try {
+    const r = localStorage.getItem(DLG_CACHE_KEY);
+    dialogueCache = r ? (JSON.parse(r) || {}) : {};
+  } catch(e) { dialogueCache = {}; }
+}
+
 function pairKey(a, b) {
   return [a.id, b.id].sort().join('|');
 }
@@ -4314,6 +4429,7 @@ function takeCachedDialogue(a, b) {
   const q = dialogueCache[key];
   if (q && q.length) {
     const item = q.shift();
+    saveDialogueCache();
     // 소진됐으니 백그라운드로 다시 채우기 예약
     setTimeout(fillDialogueCache, 100);
     return item; // { script, theme, aId, bId }
@@ -4322,6 +4438,8 @@ function takeCachedDialogue(a, b) {
 }
 // 백그라운드로 부족한 큐 채우기 (한 번에 1개씩, 과부하 방지)
 async function fillDialogueCache() {
+  if (paused) return;             // 일시정지·백그라운드면 생성 중단(비용 차단)
+  if (state.settings.autoGen === false) return; // 자동 생성 꺼짐 → 미리 채우지 않음(수동 버튼은 그대로 동작)
   if (_fillingCache) return;
   if (!state.settings.apiKey) return;
   const cs = state.characters;
@@ -4346,6 +4464,7 @@ async function fillDialogueCache() {
           const script = await generateDialogueScript(a, b, theme, deep);
           // 생성 당시 A=a, B=b 화자 매핑을 함께 저장 (재생 시 화자 뒤바뀜 방지)
           dialogueCache[key].push({ script, theme, aId: a.id, bId: b.id });
+          saveDialogueCache();
         } catch(e) { /* 조용히 실패, 다음 기회에 */ }
         break; // 한 번에 1개만 (백그라운드 부하 최소화)
       }
@@ -4373,6 +4492,7 @@ function pruneDialogueCache() {
     const [id1, id2] = key.split('|');
     if (!validIds.has(id1) || !validIds.has(id2)) delete dialogueCache[key];
   });
+  saveDialogueCache();
 }
 
 // ── 대화 페어 라운드로빈 (특정 쌍 독점 방지) ──
@@ -4703,7 +4823,10 @@ async function sendUserMsg() {
     if (Math.random() < 0.35) addCash(5, '교감');
   } catch(e) {
     typing.remove();
-    appendMsg('them', classifyError(e.message)==='token' ? '(토큰이 부족한가 봐요...)' : '(연결이 잠깐 끊겼어요)', '');
+    const k = classifyError(e.message);
+    const m = { token:'(토큰이 부족한가 봐요...)', auth:'(API 키를 확인해 주세요!)', blocked:'(연결이 막혀 있어요. Safari·Chrome에서 열어주세요.)', offline:'(인터넷이 끊긴 것 같아요.)', timeout:'(응답이 너무 늦어요...)' }[k] || '(연결이 잠깐 끊겼어요)';
+    appendMsg('them', m, '');
+    showSetupHint(k);
   }
   userChatBusy = false;
   document.getElementById('chat-send').disabled = false;
